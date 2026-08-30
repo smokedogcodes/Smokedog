@@ -20,9 +20,11 @@ export function ProfileModal({
   initialCode,
   initialMode,
   pending = null,
+  profileOnly = false,
   onClose,
   onCreate,
   onJoin,
+  onSaveProfile,
 }: {
   open: boolean;
   defaultName: string;
@@ -31,10 +33,13 @@ export function ProfileModal({
   error?: string | null;
   initialCode?: string;
   initialMode?: "create" | "join";
-  pending?: "create" | "join" | "spectate" | null;
+  pending?: "create" | "join" | null;
+  /** Homepage edit — save name/avatar without joining. */
+  profileOnly?: boolean;
   onClose: () => void;
   onCreate: (name: string, avatarId: number, opts?: { localMode?: boolean }) => void;
   onJoin: (name: string, avatarId: number, code: string) => void;
+  onSaveProfile?: (name: string, avatarId: number) => void;
 }) {
   const [name, setName] = useState(defaultName);
   const [avatarId, setAvatarId] = useState(defaultAvatar);
@@ -73,21 +78,25 @@ export function ProfileModal({
       ? "Creating party…"
       : pending === "join"
         ? "Joining party…"
-        : pending === "spectate"
-          ? "Opening spectator view…"
-          : null;
-  const joining = code.trim().length > 0;
+        : null;
+  const joining = !profileOnly && code.trim().length > 0;
   const showLocalToggle =
-    !joining && createGameId === "mafia-city";
+    !profileOnly && !joining && createGameId === "mafia-city";
 
-  const title = joining
-    ? "Join with code"
-    : createGameId
-      ? `Open ${gameLabel(createGameId)}`
-      : "Stamp your name";
+  const title = profileOnly
+    ? "Edit profile"
+    : joining
+      ? "Join with code"
+      : createGameId
+        ? `Open ${gameLabel(createGameId)}`
+        : "Stamp your name";
 
   const submit = () => {
     if (isPending || !ready) return;
+    if (profileOnly) {
+      onSaveProfile?.(name.trim(), avatarId);
+      return;
+    }
     const trimmed = code.trim();
     if (trimmed) {
       const check = validateRoomCode(trimmed);
@@ -241,6 +250,7 @@ export function ProfileModal({
                   </div>
                 )}
 
+                {!profileOnly && (
                 <div className="space-y-2">
                   <label
                     htmlFor="room_code"
@@ -267,6 +277,7 @@ export function ProfileModal({
                     }`}
                   />
                 </div>
+                )}
 
                 <AnimatePresence>
                   {isPending && pendingLabel && (
@@ -302,7 +313,7 @@ export function ProfileModal({
                   disabled={!ready}
                   onClick={submit}
                 >
-                  {isPending ? pendingLabel ?? "Processing…" : "Stamp in"}
+                  {isPending ? pendingLabel ?? "Processing…" : profileOnly ? "Save profile" : "Stamp in"}
                 </PrimaryButton>
               </div>
             </div>

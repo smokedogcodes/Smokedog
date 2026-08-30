@@ -76,11 +76,17 @@ export function TttBoard({
   socket,
   onMove,
   onSendChat,
+  enableVoice = true,
+  joinVoiceRequest,
+  onVoiceJoined,
 }: {
   state: PublicGameState;
   socket: GameSocket | null;
   onMove: (cellIndex: number) => void;
   onSendChat: (channel: ChatChannel, text: string) => void;
+  enableVoice?: boolean;
+  joinVoiceRequest?: { nonce: number; channel: ChatChannel } | null;
+  onVoiceJoined?: (channel: ChatChannel) => void;
 }) {
   const ttt = state.ttt;
   const [hover, setHover] = useState<number | null>(null);
@@ -161,7 +167,9 @@ export function TttBoard({
         state={state}
         socket={socket}
         onSend={onSendChat}
-        enableVoice={false}
+        enableVoice={enableVoice}
+        joinVoiceRequest={joinVoiceRequest}
+        onVoiceJoined={onVoiceJoined}
       />
     </div>
   );

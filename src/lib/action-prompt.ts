@@ -1,4 +1,5 @@
 import { nightActionFor } from "@/lib/games/mafia-city/roles";
+import { handHasPlayableCard } from "@/lib/games/5-alive/rules";
 import type { PublicGameState } from "@/lib/types";
 
 export const NIGHT_ACTION_PROMPTS: Record<
@@ -77,8 +78,28 @@ export function pendingFiveAliveActionPrompt(state: PublicGameState): {
   const five = state.fiveAlive;
   if (!five) return null;
 
+  if (state.phase === "fivealive_dealing") {
+    return {
+      title: "Dealing cards",
+      detail: "Please wait while hands are dealt…",
+    };
+  }
+
   if (state.phase === "fivealive_turn") {
     if (five.turnPlayerId !== you.id) return null;
+    const hand = five.yourHand ?? [];
+    if (hand.length > 0 && !handHasPlayableCard(hand, five.runningTotal)) {
+      return {
+        title: "No playable cards",
+        detail: "Losing 1 life — total reset to 0.",
+      };
+    }
+    if (five.runningTotal === 21) {
+      return {
+        title: "Total is 21",
+        detail: "Play a non-number card (=0, =10, Skip, Draw, Bomb, etc.).",
+      };
+    }
     return {
       title: "Play a card",
       detail: `Running total: ${five.runningTotal} (keep ≤ 21)`,

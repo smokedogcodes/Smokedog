@@ -31,10 +31,12 @@ export function SiteHeader({
   right,
   avatarId,
   animate = true,
+  onAvatarClick,
 }: {
   right?: ReactNode;
   avatarId?: number;
   animate?: boolean;
+  onAvatarClick?: () => void;
 }) {
   const trailing =
     right ??
@@ -43,14 +45,29 @@ export function SiteHeader({
         <span className="hidden font-mono text-[10px] uppercase tracking-widest text-crimson/60 sm:block">
           Case file
         </span>
-        <div className="bg-transparent">
-          <PlayerAvatar id={avatarId} size={36} />
-        </div>
+        {onAvatarClick ? (
+          <button
+            type="button"
+            onClick={onAvatarClick}
+            className="flex items-center gap-2 rounded-sm border border-transparent px-1 py-0.5 transition hover:border-crimson/30"
+            aria-label="Edit profile"
+            title="Edit profile"
+          >
+            <PlayerAvatar id={avatarId} size={36} />
+            <span className="hidden font-mono text-[9px] uppercase tracking-widest text-crimson/70 sm:inline">
+              Edit
+            </span>
+          </button>
+        ) : (
+          <div className="bg-transparent">
+            <PlayerAvatar id={avatarId} size={36} />
+          </div>
+        )}
       </>
     ) : null);
 
   const className =
-    "relative flex items-center justify-between gap-3 border-b border-crimson/20 px-3 py-2.5 sm:px-6 sm:py-4 md:px-10";
+    "relative flex items-center justify-between gap-3 border-b border-crimson/20 px-3 pb-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] sm:px-6 sm:py-4 md:px-10";
 
   if (animate) {
     return (

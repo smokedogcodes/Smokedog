@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ArrowLeftRight,
   Bomb,
   SkipForward,
   Sparkles,
@@ -10,6 +9,7 @@ import {
 import { cn } from "@/lib/cn";
 import { fiveAliveCardVisual } from "@/lib/games/5-alive/card-visual";
 import type { PublicFiveAliveCard } from "@/lib/types";
+import { FaReverseIcon, FaPassMeByIcon } from "@/components/mockups/five-alive/FiveAliveActionIcons";
 
 export type FiveAliveCardFaceProps = {
   card: PublicFiveAliveCard;
@@ -65,9 +65,9 @@ export function FiveAliveCardFace({
         elevated && "-translate-y-2 shadow-xl",
         className
       )}
-      style={{ fontSize: width / 14, width }}
+      style={{ fontSize: width / 11, width }}
     >
-      <div className="absolute inset-x-0 top-[0.55em] text-center font-display text-[0.65em] font-extrabold uppercase tracking-[0.18em] text-[#8B1E1E]">
+      <div className="absolute inset-x-0 top-[0.5em] text-center font-display text-[0.72em] font-extrabold uppercase tracking-[0.18em] text-[#8B1E1E]">
         5 Alive
       </div>
 
@@ -75,26 +75,32 @@ export function FiveAliveCardFace({
         <CategoryIcon category={visual.category} className={visual.accentClass} />
       </div>
 
-      <div className="absolute inset-0 flex flex-col items-center justify-center px-2 pt-3">
+      <div className="absolute inset-[12%_8%] flex flex-col items-center justify-center px-1">
         {isUtility ? (
-          <ArrowLeftRight
-            className={cn("mb-1 size-[2em]", visual.accentClass)}
-            strokeWidth={2.5}
-          />
+          card.type === "reverse" ? (
+            <div className={cn("mb-0.5 size-[1.7em]", visual.accentClass)}>
+              <FaReverseIcon corner />
+            </div>
+          ) : (
+            <div className={cn("mb-0.5 size-[1.55em]", visual.accentClass)}>
+              <FaPassMeByIcon corner direction="right" />
+            </div>
+          )
         ) : null}
         <span
           className={cn(
-            "font-display font-extrabold leading-none",
-            visual.label.length > 3 ? "text-[2em]" : "text-[3.2em]",
+            "font-display font-extrabold",
+            visual.label.length > 3 ? "text-[1.7em]" : "text-[2.45em]",
             visual.accentClass
           )}
+          style={{ lineHeight: 0.92 }}
         >
           {visual.label}
         </span>
       </div>
 
       <div className="absolute inset-x-0 bottom-[0.5em] text-center">
-        <span className="rounded-full bg-black/[0.04] px-2 py-0.5 font-mono text-[0.55em] uppercase tracking-widest text-[#457b9d]">
+        <span className="rounded-full bg-black/[0.04] px-2 py-0.5 font-mono text-[0.62em] uppercase tracking-widest text-[#457b9d]">
           {visual.tagLabel}
         </span>
       </div>

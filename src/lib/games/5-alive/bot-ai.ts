@@ -1,5 +1,10 @@
 import type { FiveAliveCardInstance } from "./cards";
-import { isNumber0 } from "./cards";
+import {
+  canPlayFiveAliveCardAtTotal,
+  isFiveAliveActionCard,
+  isPlayableAtTwentyOne,
+} from "./rules";
+import { isBombDefuseCard } from "./actions";
 
 function pick<T>(items: T[]): T | undefined {
   if (items.length === 0) return undefined;
@@ -7,14 +12,29 @@ function pick<T>(items: T[]): T | undefined {
 }
 
 export function botFiveAliveDelayMs(): number {
-  return 1500 + Math.floor(Math.random() * 4500);
+  return 4000 + Math.floor(Math.random() * 5500);
 }
 
 export function pickBotFiveAliveTurnPlay(
   hand: FiveAliveCardInstance[],
   runningTotal: number
-): { cardId: string; wildValue?: number } | null {
+): { cardId?: string; pass?: boolean } | null {
   if (hand.length === 0) return null;
+
+  if (runningTotal === 21) {
+    const zeros = hand.filter(
+      (c) => c.type === "number" && (c.value ?? -1) === 0
+    );
+    if (zeros.length > 0) return { cardId: pick(zeros)!.id };
+    const unlocks = hand.filter((c) => isPlayableAtTwentyOne(c.type));
+    if (unlocks.length === 0) return { pass: true };
+    // Prefer total-setters, then other actions.
+    const setters = unlocks.filter(
+      (c) => c.type === "reset0" || c.type === "eq10" || c.type === "eq21"
+    );
+    if (setters.length > 0) return { cardId: pick(setters)!.id };
+    return { cardId: pick(unlocks)!.id };
+  }
 
   const safeNumbers = hand.filter(
     (c): c is Extract<FiveAliveCardInstance, { type: "number" }> =>
@@ -23,43 +43,38 @@ export function pickBotFiveAliveTurnPlay(
   if (safeNumbers.length > 0) {
     const sorted = [...safeNumbers].sort((a, b) => b.value - a.value);
     const topHalf = sorted.slice(0, Math.max(1, Math.ceil(sorted.length / 2)));
-    const chosen = pick(topHalf)!;
-    return { cardId: chosen.id };
+    return { cardId: pick(topHalf)!.id };
   }
 
   const reset0 = hand.find((c) => c.type === "reset0");
   if (reset0) return { cardId: reset0.id };
 
+  const eq10 = hand.find((c) => c.type === "eq10");
+  if (eq10 && runningTotal !== 10) return { cardId: eq10.id };
+
   const eq21 = hand.find((c) => c.type === "eq21");
   if (eq21 && runningTotal !== 21) return { cardId: eq21.id };
 
-  const wild = hand.find((c) => c.type === "wild");
-  if (wild) {
-    const safeTotal = Math.min(21, runningTotal + 3);
-    return { cardId: wild.id, wildValue: safeTotal };
-  }
-
-  const utilities = hand.filter((c) =>
-    ["skip", "reverse", "draw1", "draw2"].includes(c.type)
-  );
-  if (utilities.length > 0 && Math.random() < 0.6) {
-    const chosen = pick(utilities)!;
-    return { cardId: chosen.id };
+  const utilities = hand.filter((c) => isFiveAliveActionCard(c.type));
+  if (utilities.length > 0 && Math.random() < 0.55) {
+    return { cardId: pick(utilities)!.id };
   }
 
   const bomb = hand.find((c) => c.type === "bomb");
   if (bomb) return { cardId: bomb.id };
 
-  const anyNumber = hand.find((c) => c.type === "number");
-  if (anyNumber) return { cardId: anyNumber.id };
+  const playable = hand.filter((c) =>
+    canPlayFiveAliveCardAtTotal(c, runningTotal)
+  );
+  if (playable.length > 0) return { cardId: playable[0]!.id };
 
-  return { cardId: hand[0].id };
+  return { pass: true };
 }
 
 export function pickBotFiveAliveBombResponse(
   hand: FiveAliveCardInstance[]
 ): { cardId: string } | { pass: true } {
-  const zero = hand.find((c) => isNumber0(c));
-  if (zero) return { cardId: zero.id };
+  const defuse = hand.find((c) => isBombDefuseCard(c));
+  if (defuse) return { cardId: defuse.id };
   return { pass: true };
 }

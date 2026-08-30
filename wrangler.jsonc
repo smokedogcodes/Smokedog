@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "smokedog",
+  "name": "sd",
   "main": ".open-next/worker.js",
   "compatibility_date": "2026-01-01",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
@@ -9,6 +9,6 @@
     "binding": "ASSETS"
   },
   "vars": {
-    "NEXT_PUBLIC_SOCKET_URL": "https://smokedog-game.balmeek544.workers.dev"
+    "NEXT_PUBLIC_SOCKET_URL": "https://sd-game.smokedog.workers.dev"
   }
 }

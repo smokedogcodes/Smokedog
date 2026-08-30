@@ -132,11 +132,16 @@ export function BoardLobbyView({
               </span>
               <input
                 type="number"
-                min={8}
+                min={10}
                 max={60}
                 value={state.settings.daySeconds}
                 onChange={(e) =>
-                  onSettings({ daySeconds: Number(e.target.value) || 15 })
+                  onSettings({
+                    daySeconds: Math.min(
+                      60,
+                      Math.max(10, Number(e.target.value) || 15)
+                    ),
+                  })
                 }
                 className="w-20 rounded-sm border border-crimson/20 bg-manila px-2 py-1 font-mono text-sm text-crimson"
               />

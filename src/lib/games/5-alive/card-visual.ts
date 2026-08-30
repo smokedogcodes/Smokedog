@@ -55,6 +55,30 @@ export function fiveAliveCardVisual(card: {
         accentClass: "text-crimson",
         tagLabel: "Special",
       };
+    case "eq10":
+      return {
+        label: "=10",
+        category: "special",
+        borderClass: "border-crimson",
+        accentClass: "text-crimson",
+        tagLabel: "Special",
+      };
+    case "passmeby":
+      return {
+        label: "Pass By Me",
+        category: "action",
+        borderClass: "border-crimson/60",
+        accentClass: "text-crimson",
+        tagLabel: "Action",
+      };
+    case "shuffle":
+      return {
+        label: "Shuffle",
+        category: "action",
+        borderClass: "border-crimson/60",
+        accentClass: "text-crimson",
+        tagLabel: "Action",
+      };
     case "skip":
       return {
         label: "Skip",
@@ -94,14 +118,6 @@ export function fiveAliveCardVisual(card: {
         borderClass: "border-crimson",
         accentClass: "text-crimson",
         tagLabel: "Penalty",
-      };
-    case "wild":
-      return {
-        label: "5 Alive",
-        category: "wild",
-        borderClass: "border-crimson",
-        accentClass: "text-crimson",
-        tagLabel: "Wild",
       };
   }
 }

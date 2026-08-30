@@ -6,32 +6,32 @@ import { ArrowRight } from "lucide-react";
 import { fadeUp, stagger } from "@/components/ui/motion";
 import { SiteHeader } from "@/components/ui/SiteHeader";
 
-const DETONATION_MOCKUPS = [
+const EK_MOCKUPS = [
   {
     href: "/mockups/ledger-fan",
     title: "Ledger Wide Fan",
-    style: "Detonation Cats",
+    style: "Exploding Kittens",
     layout: "Play only",
     description: "Wide fan arc — tap to play toward discard pile.",
   },
   {
     href: "/mockups/playful-rail",
     title: "Playful Scroll Rail",
-    style: "Detonation Cats",
+    style: "Exploding Kittens",
     layout: "Play only",
     description: "Horizontal rail with zero overlap.",
   },
   {
     href: "/mockups/weeb-grid",
     title: "Weeb Two-Row Grid",
-    style: "Detonation Cats",
+    style: "Exploding Kittens",
     layout: "Play only",
     description: "4×2 grid, every card face-up.",
   },
   {
     href: "/mockups/style-compare",
     title: "Style Compare",
-    style: "Detonation Cats",
+    style: "Exploding Kittens",
     layout: "Play only",
     description: "Toggle Ledger / Playful / Weeb on one layout.",
   },
@@ -39,36 +39,23 @@ const DETONATION_MOCKUPS = [
 
 const FIVE_ALIVE_MOCKUPS = [
   {
-    href: "/mockups/5alive/draw-ledger",
-    title: "Draw & Play — Ledger",
+    href: "/mockups/5alive/table",
+    title: "Table — Play & Auto-Draw",
     style: "5 Alive",
-    layout: "Draw + play + total",
-    description: "Tap draw pile (live count), play to center, running total.",
-  },
-  {
-    href: "/mockups/5alive/draw-pulse",
-    title: "Draw & Play — Pulse",
-    style: "5 Alive",
-    layout: "Draw + play + total",
-    description: "Pulse badge card art with full table interaction.",
-  },
-  {
-    href: "/mockups/5alive/draw-ticket",
-    title: "Draw & Play — Ticket",
-    style: "5 Alive",
-    layout: "Draw + play + total",
-    description: "Vintage ticket-stub cards with draw animation.",
+    layout: "Fly animations + draw count",
+    description:
+      "Official deck art. Cards fly hand → center. +1/+2 auto-draw for Player 2.",
   },
   {
     href: "/mockups/5alive/card-designs",
-    title: "Card Design Gallery",
+    title: "Full Deck Gallery",
     style: "5 Alive",
-    layout: "All card types × 3 styles",
-    description: "Compare ornate ledger, ticket, and pulse designs.",
+    layout: "Every card in the deck",
+    description: "All number, action, and wild cards matching the physical deck.",
   },
 ];
 
-function MockupGrid({ items }: { items: typeof DETONATION_MOCKUPS }) {
+function MockupGrid({ items }: { items: typeof EK_MOCKUPS }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2">
       {items.map((mockup) => (
@@ -109,7 +96,7 @@ export default function MockupsIndexPage() {
             </p>
             <h1 className="font-display text-4xl font-bold">Card UI Mockups</h1>
             <p className="max-w-2xl font-sans text-crimson/70">
-              Interactive prototypes for card games. Detonation Cats mockups focus on
+              Interactive prototypes for card games. Exploding Kittens mockups focus on
               play animation; 5 Alive mockups add draw-pile interaction, live counts, and
               richer card art.
             </p>
@@ -118,17 +105,17 @@ export default function MockupsIndexPage() {
           <motion.section variants={fadeUp} className="space-y-4">
             <h2 className="font-display text-2xl font-bold">5 Alive</h2>
             <p className="font-sans text-sm text-crimson/60">
-              Draw from the pile, see the count drop, play to center, track running total.
+              Official Hasbro-style cards. Play animations, draw pile count, forced draws on +1/+2.
             </p>
             <MockupGrid items={FIVE_ALIVE_MOCKUPS} />
           </motion.section>
 
           <motion.section variants={fadeUp} className="space-y-4">
-            <h2 className="font-display text-2xl font-bold">Detonation Cats</h2>
+            <h2 className="font-display text-2xl font-bold">Exploding Kittens</h2>
             <p className="font-sans text-sm text-crimson/60">
               Hand layout and play-to-discard animation explorations.
             </p>
-            <MockupGrid items={DETONATION_MOCKUPS} />
+            <MockupGrid items={EK_MOCKUPS} />
           </motion.section>
         </motion.div>
       </main>

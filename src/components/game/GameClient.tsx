@@ -13,7 +13,10 @@ import type {
   RoomSettings,
 } from "@/lib/types";
 import { loadProfile } from "@/lib/profile";
+import { playLobbyIdleWarning } from "@/lib/sounds";
 import { getSocket, type GameSocket } from "@/lib/socket/client";
+import { emitPageView } from "@/lib/analytics-beacon";
+import { useKnowGame } from "@/hooks/useKnowGame";
 import { ActionPrompt } from "@/components/game/ActionPrompt";
 import { ActionDialog } from "@/components/game/mafia/ActionDialog";
 import { PhaseResultPopup } from "@/components/game/mafia/PhaseResultPopup";
@@ -39,10 +42,10 @@ import { isLocalMafia } from "@/lib/mafia-local-mode";
 import { announcementForViewer } from "@/lib/announcement-for-viewer";
 import { isMafiaRole, ROLE_META } from "@/lib/games/mafia-city/roles";
 import { Mic } from "lucide-react";
-import { FiveAliveTurnPanel } from "@/components/game/five-alive/FiveAliveTurnPanel";
-import { FiveAliveBombPanel } from "@/components/game/five-alive/FiveAliveBombPanel";
-import { DetonationCatsLobbyView } from "@/components/game/DetonationCatsLobbyView";
-import { DetonationCatsTurnPanel } from "@/components/game/detonation-cats/DetonationCatsTurnPanel";
+import { FiveAlivePlayPanel } from "@/components/game/five-alive/FiveAlivePlayPanel";
+import { FiveAliveSidebar } from "@/components/game/five-alive/FiveAliveSidebar";
+import { ExplodingKittensLobbyView } from "@/components/game/exploding-kittens/ExplodingKittensLobbyView";
+import { ExplodingKittensTable } from "@/components/game/exploding-kittens/ExplodingKittensTable";
 import { SpotItLobbyView } from "@/components/game/SpotItLobbyView";
 import { SpotItTable } from "@/components/game/spot-it/SpotItTable";
 import { BoardLobbyView } from "@/components/game/board/BoardLobbyView";
@@ -52,30 +55,38 @@ import { SpectatorBanner } from "@/components/game/mafia/SpectatorBanner";
 
 export function GameClient({
   roomId,
-  spectate = false,
 }: {
   roomId: string;
-  spectate?: boolean;
 }) {
   const router = useRouter();
+  const [knowGame, setKnowGame] = useKnowGame();
   const [state, setState] = useState<PublicGameState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [socket, setSocket] = useState<GameSocket | null>(null);
   const [voiceInvite, setVoiceInvite] = useState<{
     channel: ChatChannel;
+    fromId: string;
     fromName: string;
   } | null>(null);
   const [joinVoiceRequest, setJoinVoiceRequest] = useState<{
     nonce: number;
     channel: ChatChannel;
   } | null>(null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const clearVoiceInviteForChannel = useCallback((channel: ChatChannel) => {
     setVoiceInvite((inv) => (inv?.channel === channel ? null : inv));
+    setJoinVoiceRequest((req) => (req?.channel === channel ? null : req));
   }, []);
   const [startingGame, setStartingGame] = useState(false);
   const [returningToLobby, setReturningToLobby] = useState(false);
   const [quitConfirmOpen, setQuitConfirmOpen] = useState(false);
   const [quitting, setQuitting] = useState(false);
+  const [lobbyIdleWarning, setLobbyIdleWarning] = useState<{
+    stage: 1 | 2 | 3;
+    message: string;
+    isFinal?: boolean;
+  } | null>(null);
   const [dismissedAnnouncementId, setDismissedAnnouncementId] = useState<
     string | null
   >(null);
@@ -119,6 +130,14 @@ export function GameClient({
     );
   };
 
+  useEffect(() => {
+    emitPageView({
+      path: `/room/${roomId}`,
+      roomId,
+      onceKey: `room:${roomId}`,
+    });
+  }, [roomId]);
+
   // Seed detective log cursor so reconnect/history does not spam old popups.
   // Live investigation popups come from detective:result (before town announcements).
   useEffect(() => {
@@ -135,6 +154,20 @@ export function GameClient({
     setPersonalNightPopup(next);
     setPendingPersonalNightPopups(rest);
   }, [personalNightPopup, pendingPersonalNightPopups]);
+
+  // Skip queued popups while "know game" is on so toggling off does not flood.
+  useEffect(() => {
+    if (!knowGame || state?.gameId !== "five-alive") return;
+    setPersonalNightPopup(null);
+    setPendingPersonalNightPopups([]);
+  }, [knowGame, state?.gameId]);
+
+  useEffect(() => {
+    if (!knowGame || state?.gameId !== "five-alive" || !state?.announcement) return;
+    if (state.announcement.id !== dismissedAnnouncementId) {
+      setDismissedAnnouncementId(state.announcement.id);
+    }
+  }, [knowGame, state?.gameId, state?.announcement, dismissedAnnouncementId]);
 
   useEffect(() => {
     const profile = loadProfile();
@@ -163,6 +196,8 @@ export function GameClient({
         detectiveLogReadyRef.current = false;
         setPersonalNightPopup(null);
         setPendingPersonalNightPopups([]);
+        setVoiceInvite(null);
+        setJoinVoiceRequest(null);
       }
     };
 
@@ -233,7 +268,13 @@ export function GameClient({
       setQuitting(false);
       setQuitConfirmOpen(false);
       if (message.toLowerCase().includes("kicked")) router.replace("/");
-      if (code === "NOT_FOUND" || code === "NOT_IN_ROOM") {
+      // Real room teardown (empty / host-afk / last human left) — clear local
+      // state so the closed screen shows. Host transfer does NOT emit this.
+      if (
+        code === "NOT_FOUND" ||
+        code === "NOT_IN_ROOM" ||
+        code === "LOBBY_CLOSED"
+      ) {
         setState(null);
       }
     };
@@ -243,7 +284,26 @@ export function GameClient({
       fromId: string;
       fromName: string;
     }) => {
-      setVoiceInvite({ channel: payload.channel, fromName: payload.fromName });
+      const s = stateRef.current;
+      const youId = s?.you?.id;
+      // Already in that channel — never surface the join popup again.
+      if (youId && (s?.voiceParticipants[payload.channel] ?? []).includes(youId)) {
+        return;
+      }
+      setVoiceInvite({
+        channel: payload.channel,
+        fromId: payload.fromId,
+        fromName: payload.fromName,
+      });
+    };
+
+    const onLobbyIdle = (payload: {
+      stage: 1 | 2 | 3;
+      message: string;
+      isFinal?: boolean;
+    }) => {
+      playLobbyIdleWarning(payload.stage);
+      setLobbyIdleWarning(payload);
     };
 
     finishLeaveRef.current = () => {
@@ -263,6 +323,7 @@ export function GameClient({
     s.on("room:error", onErr);
     s.on("room:left", onLeft);
     s.on("voice:invite", onInvite);
+    s.on("lobby:idleWarning", onLobbyIdle);
     s.on("chat:message", onChat);
     s.on("role:reveal", onRoleReveal);
     s.on("detective:result", onDetectiveResult);
@@ -270,16 +331,7 @@ export function GameClient({
 
     const join = () => {
       if (quittingRef.current) return;
-      if (spectate) {
-        s.emit("room:spectate", {
-          roomId,
-          playerId: profile.playerId,
-          name: profile.name,
-          avatarId: profile.avatarId,
-        });
-      } else {
-        s.emit("room:rejoin", { roomId, playerId: profile.playerId });
-      }
+      s.emit("room:rejoin", { roomId, playerId: profile.playerId });
     };
     if (s.connected) join();
     s.on("connect", join);
@@ -293,19 +345,26 @@ export function GameClient({
       s.off("room:error", onErr);
       s.off("room:left", onLeft);
       s.off("voice:invite", onInvite);
+      s.off("lobby:idleWarning", onLobbyIdle);
       s.off("chat:message", onChat);
       s.off("role:reveal", onRoleReveal);
       s.off("detective:result", onDetectiveResult);
       s.off("night:powerResult", onNightPowerResult);
       s.off("connect", join);
     };
-  }, [roomId, router, spectate]);
+  }, [roomId, router]);
 
   useEffect(() => {
     if (!state) return;
-    if (state.phase !== "lobby") setStartingGame(false);
+    if (state.phase !== "lobby") {
+      setStartingGame(false);
+      setLobbyIdleWarning(null);
+    }
+    if (state.phase === "lobby" && !state.you?.isHost) {
+      setLobbyIdleWarning(null);
+    }
     if (state.phase === "lobby") setReturningToLobby(false);
-  }, [state?.phase, state]);
+  }, [state?.phase, state?.you?.isHost, state]);
 
   useEffect(() => {
     if (!state || state.gameId !== "mafia-city" || state.phase !== "night") {
@@ -414,12 +473,32 @@ export function GameClient({
     socket.emit("ek:playCards", { roomId: state.roomId, cardIds });
   const emitEkEndTurn = () =>
     socket.emit("ek:endTurn", { roomId: state.roomId });
+  const emitEkDraw = () =>
+    socket.emit("ek:draw", { roomId: state.roomId });
+  const emitEkNope = (cardId: string) =>
+    socket.emit("ek:nope", { roomId: state.roomId, cardId });
   const emitEkPlaceDefuse = (deckIndex: number) =>
     socket.emit("ek:placeDefuse", { roomId: state.roomId, deckIndex });
   const emitEkPickDiscard = (discardIndex: number) =>
     socket.emit("ek:pickDiscard", { roomId: state.roomId, discardIndex });
   const emitEkStealTarget = (targetId: string) =>
     socket.emit("ek:stealTarget", { roomId: state.roomId, targetId });
+  const emitEkFavorTarget = (targetId: string) =>
+    socket.emit("ek:favorTarget", { roomId: state.roomId, targetId });
+  const emitEkFavorGive = (cardId: string) =>
+    socket.emit("ek:favorGive", { roomId: state.roomId, cardId });
+  const emitEkTripleDeclare = (
+    targetId: string,
+    cardType: import("@/lib/types").PublicEkCard["type"]
+  ) =>
+    socket.emit("ek:tripleDeclare", {
+      roomId: state.roomId,
+      targetId,
+      cardType,
+    });
+
+  const isEkGame =
+    state.gameId === "exploding-kittens" || state.gameId === "detonation-cats";
   const emitChat = (channel: ChatChannel, text: string) => {
     const trimmed = text.trim().slice(0, 240);
     if (!trimmed || !state.you) {
@@ -446,17 +525,38 @@ export function GameClient({
 
   const localMafia = isLocalMafia(state);
 
-  const voiceChannel =
-    !localMafia &&
-    state.gameId === "mafia-city" &&
-    state.you &&
-    availableChannels({
+  const voiceChannel = (() => {
+    if (localMafia || !state.you) return undefined;
+    const channelOpts = {
       alive: state.you.alive,
       role: state.you.role,
       blackmailed: state.you.blackmailed,
       phase: state.phase,
       daySubPhase: state.daySubPhase,
-    }).find((c) => c === "town" || c === "mafia");
+    };
+    if (state.gameId === "mafia-city") {
+      return availableChannels(channelOpts).find(
+        (c) => c === "town" || c === "mafia"
+      );
+    }
+    if (
+      state.gameId === "five-alive" &&
+      (state.phase === "fivealive_turn" ||
+        state.phase === "fivealive_bomb" ||
+        state.phase === "fivealive_dealing") &&
+      state.you.alive
+    ) {
+      return "town" as ChatChannel;
+    }
+    if (
+      state.gameId === "tic-tac-toe" &&
+      state.phase === "ttt_play" &&
+      state.you.alive
+    ) {
+      return "town" as ChatChannel;
+    }
+    return undefined;
+  })();
 
   const townVoiceOpen =
     !localMafia &&
@@ -474,12 +574,15 @@ export function GameClient({
   const actionKey = pendingAction
     ? `${state.phase}-${state.daySubPhase}-${pendingAction.title}`
     : null;
+  const knowGameActive = knowGame && state.gameId === "five-alive";
   const showAnnouncement =
+    !knowGameActive &&
     !!state.announcement &&
     state.announcement.id !== dismissedAnnouncementId &&
     !personalNightPopup &&
     pendingPersonalNightPopups.length === 0;
   const showActionDialog =
+    !knowGameActive &&
     !!pendingAction &&
     actionKey !== dismissedActionKey &&
     !showAnnouncement &&
@@ -516,14 +619,26 @@ export function GameClient({
         right={
           <GameHud
             state={state}
-            onPause={() => socket.emit("host:pause", { roomId: state.roomId })}
-            onResume={() => socket.emit("host:resume", { roomId: state.roomId })}
-            onSkipTimer={() =>
-              socket.emit("host:skipTimer", { roomId: state.roomId })
+            knowGame={knowGame}
+            onKnowGameChange={
+              state.gameId === "five-alive" ? setKnowGame : undefined
+            }
+            onPause={() =>
+              socket.emit("host:pause", {
+                roomId: state.roomId,
+                playerId: state.you?.id,
+              })
+            }
+            onResume={() =>
+              socket.emit("host:resume", {
+                roomId: state.roomId,
+                playerId: state.you?.id,
+              })
             }
             onQuit={() => setQuitConfirmOpen(true)}
             onSettings={
-              state.gameId === "mafia-city" && state.you?.isHost
+              (state.gameId === "mafia-city" || state.gameId === "five-alive") &&
+              state.you?.isHost
                 ? emitHostSettings
                 : undefined
             }
@@ -532,7 +647,33 @@ export function GameClient({
         }
       />
 
-      {personalNightPopup && (
+      {lobbyIdleWarning && state.phase === "lobby" && state.you?.isHost && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-void/70 p-4 backdrop-blur-[20px]">
+          <GlassPanel className="w-full max-w-md p-8">
+            <p className="font-mono text-xs uppercase tracking-[0.2em] text-crimson-glow">
+              Host offline
+            </p>
+            <h2 className="mt-2 font-display text-2xl font-bold">
+              {lobbyIdleWarning.isFinal
+                ? "Lobby closing now"
+                : lobbyIdleWarning.stage === 1
+                  ? "Offline 30 seconds"
+                  : "Offline 1 minute"}
+            </h2>
+            <p className="mt-3 text-sm text-ink-steel">{lobbyIdleWarning.message}</p>
+            {!lobbyIdleWarning.isFinal && (
+              <button
+                type="button"
+                onClick={() => setLobbyIdleWarning(null)}
+                className="mt-6 w-full rounded-sm border border-crimson bg-crimson py-3 font-mono text-xs uppercase tracking-widest text-manila"
+              >
+                Got it
+              </button>
+            )}
+          </GlassPanel>
+        </div>
+      )}
+      {!knowGameActive && personalNightPopup && (
         <PhaseResultPopup
           announcement={{
             id: personalNightPopup.id,
@@ -548,6 +689,8 @@ export function GameClient({
       {showAnnouncement && state.announcement && (
         <PhaseResultPopup
           announcement={announcementForViewer(state.announcement, state)}
+          durationMs={state.gameId === "five-alive" ? 4500 : undefined}
+          skipScrollToTop={state.gameId === "five-alive"}
           onDismiss={() =>
             setDismissedAnnouncementId(state.announcement!.id)
           }
@@ -569,14 +712,25 @@ export function GameClient({
       )}
 
       <main
-        className={`mx-auto max-w-6xl px-3 pb-8 sm:px-4 sm:pb-16 md:px-8 ${
+        className={`mx-auto max-w-6xl px-3 sm:px-4 md:px-8 ${
           state.gameId === "connect-4" && state.phase === "connect4_play"
             ? "pb-4"
-            : ""
+            : state.gameId === "five-alive" &&
+                state.phase !== "lobby" &&
+                state.phase !== "gameover"
+              ? "overflow-x-hidden pb-[max(2rem,env(safe-area-inset-bottom))] sm:pb-16"
+              : "pb-8 sm:pb-16"
         }`}
       >
+        {state.paused &&
+          state.phase !== "lobby" &&
+          state.phase !== "gameover" && (
+          <div className="mb-4 rounded-sm border border-crimson/40 bg-crimson/10 px-4 py-3 text-sm text-crimson">
+            Game paused by the host — timer and actions are frozen.
+          </div>
+        )}
         {voiceInvite &&
-          state.gameId === "mafia-city" &&
+          (state.gameId === "mafia-city" || state.gameId === "five-alive") &&
           !localMafia &&
           !state.spectatorMode && (
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-sm border border-crimson/40 bg-crimson/10 px-4 py-3">
@@ -608,8 +762,11 @@ export function GameClient({
             </div>
           </div>
         )}
-        <ActionPrompt state={state} />
-        {state.spectatorMode && state.phase !== "lobby" && state.phase !== "gameover" && (
+        {state.gameId !== "five-alive" && <ActionPrompt state={state} />}
+        {state.gameId === "mafia-city" &&
+          state.spectatorMode &&
+          state.phase !== "lobby" &&
+          state.phase !== "gameover" && (
           <SpectatorBanner external />
         )}
         {state.gameId === "mafia-city" &&
@@ -635,10 +792,19 @@ export function GameClient({
         ) : (
         <AnimatePresence mode="wait">
           <motion.div
-            key={state.phase}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
+            // Keep turn+bomb on one key so bomb resolution does not remount
+            // under opacity:0 (blank manila screen with only the banner).
+            key={
+              state.gameId === "five-alive" &&
+              (state.phase === "fivealive_turn" ||
+                state.phase === "fivealive_bomb" ||
+                state.phase === "fivealive_dealing")
+                ? "five-alive-play"
+                : state.phase
+            }
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
           >
             {state.phase === "lobby" && (
@@ -653,8 +819,8 @@ export function GameClient({
                     onAddBot={emitAddBot}
                     onRemoveBot={emitRemoveBot}
                   />
-                ) : state.gameId === "detonation-cats" ? (
-                  <DetonationCatsLobbyView
+                ) : isEkGame ? (
+                  <ExplodingKittensLobbyView
                     state={state}
                     onStart={emitStart}
                     starting={startingGame}
@@ -763,6 +929,9 @@ export function GameClient({
                   socket.emit("ttt:move", { roomId: state.roomId, cellIndex })
                 }
                 onSendChat={emitChat}
+                enableVoice={townVoiceOpen}
+                joinVoiceRequest={joinVoiceRequest}
+                onVoiceJoined={clearVoiceInviteForChannel}
               />
             )}
 
@@ -799,78 +968,58 @@ export function GameClient({
 
             {!state.spectatorMode &&
               state.gameId === "five-alive" &&
-              state.phase === "fivealive_turn" && (
-              <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-                <FiveAliveTurnPanel
+              (state.phase === "fivealive_dealing" ||
+                state.phase === "fivealive_turn" ||
+                state.phase === "fivealive_bomb") && (
+              <div className="grid min-w-0 gap-3 sm:gap-6 lg:grid-cols-[1fr_340px]">
+                <div className="min-w-0 overflow-x-hidden">
+                  <FiveAlivePlayPanel
+                    state={state}
+                    paused={state.paused}
+                    onPlay={(payload) => emitFiveAlivePlay(payload)}
+                    onRespond={(payload) => emitFiveAlivePlay(payload)}
+                    onInviteVoice={voiceChannel ? emitVoiceInvite : undefined}
+                  />
+                </div>
+                <FiveAliveSidebar
                   state={state}
-                  onPlay={({ cardId, wildValue }) =>
-                    emitFiveAlivePlay({ cardId, wildValue })
+                  socket={socket}
+                  onSend={emitChat}
+                  logTitle={
+                    state.phase === "fivealive_bomb"
+                      ? "Bomb log"
+                      : state.phase === "fivealive_dealing"
+                        ? "Deal log"
+                        : "Game log"
                   }
+                  enableVoice={townVoiceOpen}
+                  joinVoiceRequest={joinVoiceRequest}
+                  onVoiceJoined={clearVoiceInviteForChannel}
                 />
-                <div className="space-y-4">
-                  <GlassPanel className="p-4">
-                    <h3 className="font-mono text-[10px] uppercase tracking-widest text-ink-steel">
-                      Turn log
-                    </h3>
-                    <ul className="mt-2 space-y-1 text-sm text-ink-steel">
-                      {state.logs.slice(-6).map((l) => (
-                        <li key={l.id}>{l.text}</li>
-                      ))}
-                    </ul>
-                  </GlassPanel>
-                  <ChatPanel
-                    state={state}
-                    socket={socket}
-                    onSend={emitChat}
-                    enableVoice={false}
-                  />
-                </div>
               </div>
             )}
 
             {!state.spectatorMode &&
-              state.gameId === "five-alive" &&
-              state.phase === "fivealive_bomb" && (
-              <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-                <FiveAliveBombPanel
-                  state={state}
-                  onRespond={(payload) => emitFiveAlivePlay(payload)}
-                />
-                <div className="space-y-4">
-                  <GlassPanel className="p-4">
-                    <h3 className="font-mono text-[10px] uppercase tracking-widest text-ink-steel">
-                      Bomb log
-                    </h3>
-                    <ul className="mt-2 space-y-1 text-sm text-ink-steel">
-                      {state.logs.slice(-6).map((l) => (
-                        <li key={l.id}>{l.text}</li>
-                      ))}
-                    </ul>
-                  </GlassPanel>
-                  <ChatPanel
-                    state={state}
-                    socket={socket}
-                    onSend={emitChat}
-                    enableVoice={false}
-                  />
-                </div>
-              </div>
-            )}
-
-            {!state.spectatorMode &&
-              state.gameId === "detonation-cats" &&
+              isEkGame &&
               (state.phase === "ek_turn" ||
                 state.phase === "ek_defuse" ||
                 state.phase === "ek_pick_discard" ||
-                state.phase === "ek_steal") && (
+                state.phase === "ek_steal" ||
+                state.phase === "ek_favor" ||
+                state.phase === "ek_triple") && (
               <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-                <DetonationCatsTurnPanel
+                <ExplodingKittensTable
                   state={state}
                   onPlayCards={emitEkPlayCards}
                   onEndTurn={emitEkEndTurn}
+                  onDraw={emitEkDraw}
+                  onNope={emitEkNope}
                   onPlaceDefuse={emitEkPlaceDefuse}
                   onPickDiscard={emitEkPickDiscard}
                   onStealTarget={emitEkStealTarget}
+                  onFavorTarget={emitEkFavorTarget}
+                  onFavorGive={emitEkFavorGive}
+                  onTripleDeclare={emitEkTripleDeclare}
                 />
                 <div className="space-y-4">
                   <GlassPanel className="p-4">
@@ -887,7 +1036,9 @@ export function GameClient({
                     state={state}
                     socket={socket}
                     onSend={emitChat}
-                    enableVoice={false}
+                    enableVoice={townVoiceOpen}
+                    joinVoiceRequest={joinVoiceRequest}
+                    onVoiceJoined={clearVoiceInviteForChannel}
                   />
                 </div>
               </div>
@@ -976,9 +1127,30 @@ export function GameClient({
                     state={state}
                     socket={socket}
                     onSend={emitChat}
+                    enableVoice={townVoiceOpen}
                     joinVoiceRequest={joinVoiceRequest}
                     onVoiceJoined={clearVoiceInviteForChannel}
                     mobileBubble
+                    hasVoiceInvite={!!voiceInvite}
+                  />
+                </div>
+              )}
+
+            {state.gameId === "five-alive" &&
+              !state.spectatorMode &&
+              (state.phase === "fivealive_turn" ||
+                state.phase === "fivealive_bomb" ||
+                state.phase === "fivealive_dealing") && (
+                <div className="md:hidden">
+                  <ChatPanel
+                    state={state}
+                    socket={socket}
+                    onSend={emitChat}
+                    enableVoice={townVoiceOpen}
+                    joinVoiceRequest={joinVoiceRequest}
+                    onVoiceJoined={clearVoiceInviteForChannel}
+                    mobileBubble
+                    hasVoiceInvite={!!voiceInvite}
                   />
                 </div>
               )}

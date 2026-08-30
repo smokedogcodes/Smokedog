@@ -6,7 +6,7 @@ set -euo pipefail
 
 REPO="${REPO:-https://github.com/elorakart/Smokedog.git}"
 APP_DIR="${APP_DIR:-$HOME/Smokedog}"
-CORS_ORIGIN="${CORS_ORIGIN:-https://smokedog.balmeek544.workers.dev}"
+CORS_ORIGIN="${CORS_ORIGIN:-https://sd.smokedog.workers.dev}"
 PORT="${PORT:-3001}"
 SERVICE_NAME="${SERVICE_NAME:-smokedog-game}"
 

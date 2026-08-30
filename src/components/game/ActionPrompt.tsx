@@ -9,9 +9,19 @@ import type { PublicGameState } from "@/lib/types";
 
 export function ActionPrompt({ state }: { state: PublicGameState }) {
   const [now, setNow] = useState(Date.now());
+  const [compactMobile, setCompactMobile] = useState(false);
+
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    const update = () => setCompactMobile(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
   }, []);
 
   const remaining = state.phaseEndsAt
@@ -31,6 +41,7 @@ export function ActionPrompt({ state }: { state: PublicGameState }) {
 
   const closing = remaining != null && remaining > 0 && remaining <= 10;
   const urgent = closing;
+  const faCompact = state.gameId === "five-alive" && compactMobile;
 
   return (
     <AnimatePresence>
@@ -38,20 +49,32 @@ export function ActionPrompt({ state }: { state: PublicGameState }) {
         key={`${pending.title}-${urgent ? "urgent" : "idle"}`}
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
-        className={`mb-6 flex items-start gap-3 rounded-sm border px-4 py-3 ${
+        className={`flex items-start gap-2 rounded-sm border ${
+          faCompact ? "mb-3 px-3 py-2" : "mb-6 gap-3 px-4 py-3"
+        } ${
           urgent
             ? "animate-pulse border-crimson bg-crimson/15 text-crimson-glow shadow-glow"
             : "border-crimson/40 bg-crimson/10 text-crimson"
         }`}
       >
-        {urgent ? <Clock size={16} className="mt-0.5 shrink-0" /> : <AlertTriangle size={16} className="mt-0.5 shrink-0" />}
-        <div>
-          <p className="font-mono text-[10px] uppercase tracking-[0.2em]">
+        {urgent ? (
+          <Clock size={faCompact ? 14 : 16} className="mt-0.5 shrink-0" />
+        ) : (
+          <AlertTriangle size={faCompact ? 14 : 16} className="mt-0.5 shrink-0" />
+        )}
+        <div className="min-w-0">
+          <p
+            className={`font-mono uppercase tracking-[0.2em] ${
+              faCompact ? "text-[9px]" : "text-[10px]"
+            }`}
+          >
             {urgent && remaining != null
               ? `${pending.title} — ${remaining}s left`
               : pending.title}
           </p>
-          <p className="mt-1 text-sm">{pending.detail}</p>
+          <p className={`${faCompact ? "mt-0.5 text-xs" : "mt-1 text-sm"}`}>
+            {pending.detail}
+          </p>
         </div>
       </motion.div>
     </AnimatePresence>

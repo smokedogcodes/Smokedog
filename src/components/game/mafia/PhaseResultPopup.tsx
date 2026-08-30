@@ -16,10 +16,13 @@ export function PhaseResultPopup({
   announcement,
   onDismiss,
   durationMs = AUTO_DISMISS_MS,
+  skipScrollToTop = false,
 }: {
   announcement: PhaseAnnouncement;
   onDismiss: () => void;
   durationMs?: number;
+  /** Skip scroll-to-top (e.g. five-alive on mobile). */
+  skipScrollToTop?: boolean;
 }) {
   useEffect(() => {
     if (announcement.title.toLowerCase().includes("voting")) {
@@ -29,7 +32,9 @@ export function PhaseResultPopup({
     } else if (announcement.tone === "bad") {
       playBadNews();
     }
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    if (!skipScrollToTop) {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
     const t = setTimeout(onDismiss, durationMs);
     return () => clearTimeout(t);
   }, [
@@ -37,6 +42,7 @@ export function PhaseResultPopup({
     announcement.title,
     announcement.tone,
     durationMs,
+    skipScrollToTop,
     onDismiss,
   ]);
 

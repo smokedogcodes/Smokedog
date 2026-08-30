@@ -395,7 +395,31 @@ export function useVoiceChat(
     localStreamRef.current.getAudioTracks().forEach((t) => {
       t.enabled = !muted;
     });
-  }, [joined, muted]);
+    if (socket && channelRef.current) {
+      socket.emit("voice:muted", {
+        roomId,
+        channel: channelRef.current,
+        muted,
+      });
+    }
+  }, [joined, muted, socket, roomId]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const onForcedMute = (payload: {
+      channel: ChatChannel;
+      playerId: string;
+      muted: boolean;
+    }) => {
+      if (payload.playerId !== playerIdRef.current) return;
+      if (payload.channel !== channelRef.current) return;
+      setMuted(payload.muted);
+    };
+    socket.on("voice:muted", onForcedMute);
+    return () => {
+      socket.off("voice:muted", onForcedMute);
+    };
+  }, [socket]);
 
   useEffect(() => {
     if (!joined) return;

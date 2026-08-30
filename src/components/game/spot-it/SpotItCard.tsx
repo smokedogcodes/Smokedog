@@ -1,127 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import {
-  Anchor,
-  Bike,
-  Bell,
-  Bookmark,
-  Brush,
-  Building2,
-  Camera,
-  Car,
-  Cat,
-  Circle,
-  Clock,
-  Cloud,
-  Compass,
-  Crown,
-  Diamond,
-  Droplet,
-  Eye,
-  Flag,
-  Flame,
-  Flower2,
-  Ghost,
-  Gift,
-  Headphones,
-  Heart,
-  Hexagon,
-  Home,
-  Hourglass,
-  Key,
-  Leaf,
-  Lock,
-  Mail,
-  MapPin,
-  Mic,
-  Moon,
-  Mountain,
-  Music,
-  Octagon,
-  Palette,
-  Pencil,
-  Phone,
-  Plane,
-  Radio,
-  Rocket,
-  Scissors,
-  Ship,
-  Smile,
-  Snowflake,
-  Square,
-  Star,
-  Sun,
-  Target,
-  TreePine,
-  Triangle,
-  Trophy,
-  Tv,
-  Waves,
-  Zap,
-  type LucideIcon,
-} from "lucide-react";
-import { symbolKey } from "@/lib/games/spot-it/symbols";
-
-const ICON_MAP: Record<string, LucideIcon> = {
-  circle: Circle,
-  square: Square,
-  triangle: Triangle,
-  star: Star,
-  heart: Heart,
-  diamond: Diamond,
-  hexagon: Hexagon,
-  octagon: Octagon,
-  moon: Moon,
-  sun: Sun,
-  cloud: Cloud,
-  zap: Zap,
-  flame: Flame,
-  droplet: Droplet,
-  snowflake: Snowflake,
-  leaf: Leaf,
-  flower: Flower2,
-  tree: TreePine,
-  mountain: Mountain,
-  waves: Waves,
-  anchor: Anchor,
-  compass: Compass,
-  "map-pin": MapPin,
-  home: Home,
-  building: Building2,
-  car: Car,
-  plane: Plane,
-  ship: Ship,
-  bike: Bike,
-  rocket: Rocket,
-  key: Key,
-  lock: Lock,
-  bell: Bell,
-  clock: Clock,
-  hourglass: Hourglass,
-  camera: Camera,
-  music: Music,
-  mic: Mic,
-  headphones: Headphones,
-  radio: Radio,
-  tv: Tv,
-  phone: Phone,
-  mail: Mail,
-  gift: Gift,
-  crown: Crown,
-  trophy: Trophy,
-  target: Target,
-  flag: Flag,
-  bookmark: Bookmark,
-  scissors: Scissors,
-  pencil: Pencil,
-  brush: Brush,
-  palette: Palette,
-  eye: Eye,
-  smile: Smile,
-  ghost: Ghost,
-  cat: Cat,
-};
+import { symbolEmoji, twemojiSvgUrl } from "@/lib/games/spot-it/symbols";
 
 function hashSeed(symbols: number[]): number {
   return symbols.reduce((a, b) => (a * 31 + b) >>> 0, 7);
@@ -165,11 +45,10 @@ export function SpotItCard({
 
   return (
     <div
-      className={`relative aspect-square ${dim} rounded-full border-2 border-crimson/30 bg-gradient-to-br from-crimson/20 to-manila shadow-lg`}
+      className={`relative aspect-square ${dim} rounded-full border-2 border-crimson/30 bg-gradient-to-br from-[#fff8ef] via-[#f3e6d4] to-[#e8d2b8] shadow-lg`}
     >
       {items.map((item) => {
-        const key = symbolKey(item.id);
-        const Icon = ICON_MAP[key] ?? Circle;
+        const emoji = symbolEmoji(item.id);
         const flashing = flashId === item.id;
         return (
           <button
@@ -177,8 +56,11 @@ export function SpotItCard({
             type="button"
             disabled={disabled || !onPick}
             onClick={() => onPick?.(item.id)}
-            className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full p-1 text-ink transition hover:scale-110 disabled:cursor-default ${
-              flashing ? "scale-125 text-crimson-glow" : "text-ink"
+            aria-label={emoji}
+            className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full p-0.5 transition hover:scale-110 disabled:cursor-default ${
+              flashing
+                ? "scale-125 drop-shadow-[0_0_10px_rgba(230,25,25,0.55)]"
+                : ""
             }`}
             style={{
               left: `${item.x}%`,
@@ -188,7 +70,13 @@ export function SpotItCard({
               transform: `translate(-50%, -50%) rotate(${item.rot}deg)`,
             }}
           >
-            <Icon className="h-full w-full" strokeWidth={1.75} />
+            {/* Twemoji SVGs — colorful figures, independent of site palette */}
+            <img
+              src={twemojiSvgUrl(emoji)}
+              alt=""
+              draggable={false}
+              className="pointer-events-none h-full w-full select-none object-contain"
+            />
           </button>
         );
       })}

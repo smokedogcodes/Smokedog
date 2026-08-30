@@ -1,14 +1,7 @@
 "use client";
 
-import { FiveAliveTableMockup } from "@/components/mockups/five-alive/FiveAliveTableMockup";
+import { redirect } from "next/navigation";
 
-export default function FiveAliveDrawLedgerPage() {
-  return (
-    <FiveAliveTableMockup
-      title="Draw & Play — Ledger Ornate"
-      description="Full 5 Alive table: tap the draw pile to pull cards (count badge updates), play to center pile, running total tracks the pile. Ornate ledger card art with corner filigree and category stripes."
-      variant="ledger"
-      variantLabel="Ledger ornate"
-    />
-  );
+export default function FiveAliveDrawLedgerRedirect() {
+  redirect("/mockups/5alive/table");
 }

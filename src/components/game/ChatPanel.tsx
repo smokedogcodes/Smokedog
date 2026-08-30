@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageCircle, Mic, MicOff, PhoneOff, X } from "lucide-react";
 import { motion } from "framer-motion";
 import type { ChatChannel, ChatMessage, PublicGameState } from "@/lib/types";
+import { cn } from "@/lib/cn";
 import { GlassPanel } from "@/components/ui/primitives";
 import { PlayerAvatar } from "@/components/ui/PlayerAvatar";
 import { ScrollToLatestPill } from "@/components/ui/ScrollToLatestPill";
@@ -26,6 +27,7 @@ export function ChatPanel({
   onVoiceJoined,
   enableVoice = true,
   mobileBubble = false,
+  hasVoiceInvite = false,
 }: {
   state: PublicGameState;
   socket: GameSocket | null;
@@ -33,8 +35,10 @@ export function ChatPanel({
   joinVoiceRequest?: { nonce: number; channel: ChatChannel } | null;
   onVoiceJoined?: (channel: ChatChannel) => void;
   enableVoice?: boolean;
-  /** Fixed draggable chat bubble near the top (mobile). */
+  /** Draggable chat bubble (mobile). Defaults to bottom-right with safe-area inset. */
   mobileBubble?: boolean;
+  /** Pending voice invite — show attention badge on mobile bubble. */
+  hasVoiceInvite?: boolean;
 }) {
   const you = state.you;
   const channelOpts = useMemo(
@@ -64,7 +68,15 @@ export function ChatPanel({
   const [tab, setTab] = useState<ChatChannel>(tabs[0]?.id ?? "town");
   const active = tabs.some((t) => t.id === tab) ? tab : tabs[0]?.id ?? "town";
   const [sheetOpen, setSheetOpen] = useState(false);
-  const [bubblePos, setBubblePos] = useState({ x: 16, y: 72 });
+  const [bubblePos, setBubblePos] = useState<
+    { x: number; y: number } | "default"
+  >("default");
+  const [closedUnread, setClosedUnread] = useState(0);
+  /** iOS keyboard inset — keeps mobile sheet composer above the keyboard. */
+  const [keyboardInset, setKeyboardInset] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState<number | null>(null);
+  const lastSeenChatLenRef = useRef(state.chat.length);
+  const syncViewportRef = useRef<(() => void) | null>(null);
   const dragRef = useRef<{
     ox: number;
     oy: number;
@@ -72,6 +84,53 @@ export function ChatPanel({
     sy: number;
     moved: boolean;
   } | null>(null);
+
+  useEffect(() => {
+    if (!mobileBubble || !sheetOpen) {
+      setKeyboardInset(0);
+      setViewportHeight(null);
+      syncViewportRef.current = null;
+      return;
+    }
+    const vv = window.visualViewport;
+    if (!vv) return;
+
+    const syncViewport = () => {
+      // Layout bottom under the keyboard ≈ innerHeight − (vv.height + vv.offsetTop)
+      const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      setKeyboardInset(inset);
+      setViewportHeight(vv.height);
+    };
+    syncViewportRef.current = syncViewport;
+    syncViewport();
+    vv.addEventListener("resize", syncViewport);
+    vv.addEventListener("scroll", syncViewport);
+    window.addEventListener("resize", syncViewport);
+    return () => {
+      syncViewportRef.current = null;
+      vv.removeEventListener("resize", syncViewport);
+      vv.removeEventListener("scroll", syncViewport);
+      window.removeEventListener("resize", syncViewport);
+    };
+  }, [mobileBubble, sheetOpen]);
+
+  useEffect(() => {
+    if (!mobileBubble) return;
+    if (sheetOpen) {
+      lastSeenChatLenRef.current = state.chat.length;
+      setClosedUnread(0);
+      return;
+    }
+    const growth = Math.max(0, state.chat.length - lastSeenChatLenRef.current);
+    // Only count messages from others while bubble is closed.
+    if (growth === 0) return;
+    const newer = state.chat.slice(lastSeenChatLenRef.current);
+    const fromOthers = newer.filter((m) => m.playerId !== you?.id).length;
+    lastSeenChatLenRef.current = state.chat.length;
+    if (fromOthers > 0) {
+      setClosedUnread((n) => n + fromOthers);
+    }
+  }, [mobileBubble, sheetOpen, state.chat, you?.id]);
 
   useEffect(() => {
     if (!tabs.some((t) => t.id === tab) && tabs[0]) setTab(tabs[0].id);
@@ -113,20 +172,31 @@ export function ChatPanel({
     playerNames
   );
 
+  // Only react to a new invite nonce — do not re-open the sheet when `tabs`
+  // is recreated on every room:state / speaking-driven parent render.
+  const handledJoinNonceRef = useRef<number | null>(null);
   useEffect(() => {
     if (!enableVoice || !joinVoiceRequest) return;
+    if (handledJoinNonceRef.current === joinVoiceRequest.nonce) return;
+    handledJoinNonceRef.current = joinVoiceRequest.nonce;
     if (tabs.some((t) => t.id === joinVoiceRequest.channel)) {
       setTab(joinVoiceRequest.channel);
     }
     if (mobileBubble) setSheetOpen(true);
-  }, [enableVoice, joinVoiceRequest, tabs, mobileBubble]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally nonce-only
+  }, [enableVoice, joinVoiceRequest?.nonce, mobileBubble]);
 
   useEffect(() => {
     if (!enableVoice || !joinVoiceRequest) return;
+    if (handledJoinNonceRef.current !== joinVoiceRequest.nonce) return;
     if (active !== joinVoiceRequest.channel) return;
+    if (voice.joined) {
+      onVoiceJoined?.(active);
+      return;
+    }
     void voice.join();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [joinVoiceRequest?.nonce, active]);
+  }, [joinVoiceRequest?.nonce, active, voice.joined]);
 
   useEffect(() => {
     if (!enableVoice || !voice.joined) return;
@@ -151,12 +221,19 @@ export function ChatPanel({
   }, [state.voiceParticipants, active, voice.joined, you?.id]);
 
   const onBubblePointerDown = (e: React.PointerEvent) => {
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture?.(e.pointerId);
+    const rect = el.getBoundingClientRect();
+    const sx = bubblePos === "default" ? rect.left : bubblePos.x;
+    const sy = bubblePos === "default" ? rect.top : bubblePos.y;
+    if (bubblePos === "default") {
+      setBubblePos({ x: sx, y: sy });
+    }
     dragRef.current = {
       ox: e.clientX,
       oy: e.clientY,
-      sx: bubblePos.x,
-      sy: bubblePos.y,
+      sx,
+      sy,
       moved: false,
     };
   };
@@ -194,6 +271,19 @@ export function ChatPanel({
     );
   }
 
+  const keyboardOpen = keyboardInset > 0;
+  const mobileSheetMaxHeight =
+    mobileBubble && viewportHeight != null
+      ? Math.max(
+          200,
+          Math.min(
+            520,
+            keyboardOpen ? viewportHeight - 16 : viewportHeight * 0.7,
+            viewportHeight - (keyboardOpen ? 8 : 24)
+          )
+        )
+      : null;
+
   const panel = (
     <GlassPanel
       className={`relative flex flex-col ${
@@ -201,6 +291,11 @@ export function ChatPanel({
           ? "h-[min(70vh,520px)] w-full"
           : "h-[420px] max-md:h-[50vh]"
       }`}
+      style={
+        mobileSheetMaxHeight != null
+          ? { height: mobileSheetMaxHeight, maxHeight: mobileSheetMaxHeight }
+          : undefined
+      }
     >
       <div className="flex divide-x divide-crimson/30 border-b border-crimson/30">
         {mobileBubble && (
@@ -278,18 +373,23 @@ export function ChatPanel({
                 const name = player?.name ?? "Operator";
                 const isSpeaking = speaking.has(id);
                 const isYou = id === you?.id;
+                const isMuted =
+                  (state.voiceMutedIds ?? []).includes(id) ||
+                  (isYou && voice.muted);
+                const canHostMute =
+                  !!you?.isHost && !isYou && voice.joined;
                 return (
                   <div
                     key={id}
                     className={`flex flex-col items-center gap-1 rounded-sm border px-1.5 py-2 ${
-                      isSpeaking
+                      isSpeaking && !isMuted
                         ? "border-crimson/60 bg-crimson/10"
                         : "border-crimson/20 bg-crimson/[0.03]"
                     }`}
                   >
                     <div
                       className={`relative size-10 rounded-full bg-transparent ring-2 transition ${
-                        isSpeaking
+                        isSpeaking && !isMuted
                           ? "animate-pulse ring-crimson"
                           : "ring-transparent"
                       }`}
@@ -299,10 +399,30 @@ export function ChatPanel({
                         size={40}
                         className="h-full w-full"
                       />
+                      {isMuted ? (
+                        <span className="absolute -bottom-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full border border-crimson/40 bg-manila text-crimson">
+                          <MicOff size={10} />
+                        </span>
+                      ) : null}
                     </div>
                     <span className="w-full truncate text-center font-mono text-[9px] uppercase tracking-wider text-ink">
                       {isYou ? "You" : name}
                     </span>
+                    {canHostMute ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          socket?.emit("host:voiceMute", {
+                            roomId: state.roomId,
+                            targetId: id,
+                            muted: !isMuted,
+                          })
+                        }
+                        className="font-mono text-[8px] uppercase tracking-widest text-crimson/70 hover:text-crimson"
+                      >
+                        {isMuted ? "Unmute" : "Mute"}
+                      </button>
+                    ) : null}
                   </div>
                 );
               })}
@@ -374,7 +494,7 @@ export function ChatPanel({
       </div>
 
       <form
-        className="flex border-t border-crimson/20"
+        className="flex shrink-0 border-t border-crimson/20 bg-manila"
         onSubmit={(e) => {
           e.preventDefault();
           submit();
@@ -384,6 +504,16 @@ export function ChatPanel({
           value={text}
           disabled={!canSendActive}
           onChange={(e) => setText(e.target.value)}
+          onFocus={() => {
+            // Re-measure after iOS keyboard animation starts so Send stays on-screen.
+            if (!mobileBubble) return;
+            requestAnimationFrame(() => syncViewportRef.current?.());
+            window.setTimeout(() => syncViewportRef.current?.(), 100);
+            window.setTimeout(() => syncViewportRef.current?.(), 300);
+          }}
+          enterKeyHint="send"
+          autoComplete="off"
+          autoCorrect="on"
           placeholder={
             !canViewActive
               ? "Channel closed"
@@ -395,12 +525,13 @@ export function ChatPanel({
                   ? "Silenced"
                   : "Transmit..."
           }
-          className="flex-1 bg-transparent px-3 py-3 text-sm outline-none disabled:opacity-50"
+          // Explicit 16px (not rem) prevents iOS Safari focus zoom; md:text-sm restores desktop density
+          className="min-w-0 flex-1 bg-transparent px-3 py-3 text-[16px] outline-none disabled:opacity-50 md:text-sm"
         />
         <button
           type="submit"
           disabled={!canSendActive}
-          className="px-4 font-mono text-[10px] uppercase tracking-widest text-crimson-glow disabled:opacity-40"
+          className="shrink-0 self-stretch px-4 font-mono text-[10px] uppercase tracking-widest text-crimson-glow disabled:opacity-40"
         >
           Send
         </button>
@@ -410,11 +541,20 @@ export function ChatPanel({
 
   if (!mobileBubble) return panel;
 
+  const badgeCount = sheetOpen ? unread : Math.max(unread, closedUnread);
+  const showDot = hasVoiceInvite || badgeCount > 0;
+
   return (
     <>
       <button
         type="button"
-        aria-label="Open chat"
+        aria-label={
+          hasVoiceInvite
+            ? "Open chat — voice invite pending"
+            : badgeCount > 0
+              ? `Open chat — ${badgeCount} unread`
+              : "Open chat"
+        }
         onPointerDown={onBubblePointerDown}
         onPointerMove={onBubblePointerMove}
         onPointerUp={onBubblePointerUp}
@@ -422,17 +562,41 @@ export function ChatPanel({
           dragRef.current = null;
         }}
         className="fixed z-40 flex size-14 touch-none items-center justify-center rounded-full border-2 border-crimson bg-manila text-crimson shadow-stamp"
-        style={{ left: bubblePos.x, top: bubblePos.y }}
+        style={
+          bubblePos === "default"
+            ? {
+                bottom: "max(1rem, env(safe-area-inset-bottom))",
+                right: "max(1rem, env(safe-area-inset-right))",
+              }
+            : { left: bubblePos.x, top: bubblePos.y }
+        }
       >
         <MessageCircle size={22} />
-        {unread > 0 && (
-          <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-crimson px-1 font-mono text-[9px] text-manila">
-            {unread > 9 ? "9+" : unread}
+        {showDot && (
+          <span
+            className={cn(
+              "absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-crimson px-1 font-mono text-[9px] text-manila",
+              hasVoiceInvite && badgeCount === 0 && "animate-pulse"
+            )}
+          >
+            {badgeCount > 0 ? (badgeCount > 9 ? "9+" : badgeCount) : "!"}
           </span>
         )}
       </button>
       {sheetOpen && (
-        <div className="fixed inset-x-0 bottom-0 z-50 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+        <div
+          data-lenis-prevent
+          className="fixed inset-x-0 z-50 px-3"
+          style={{
+            bottom: keyboardInset,
+            paddingBottom: keyboardOpen
+              ? 8
+              : "max(0.75rem, env(safe-area-inset-bottom))",
+            paddingTop: 12,
+            maxHeight:
+              viewportHeight != null ? viewportHeight : undefined,
+          }}
+        >
           <div
             className="absolute inset-0 -z-10 bg-void/40"
             onClick={() => setSheetOpen(false)}

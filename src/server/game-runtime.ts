@@ -26,12 +26,25 @@ import type {
 } from "@/lib/types";
 import {
   DAY_VOTE_SECONDS,
+  LOBBY_HOST_IDLE_MS,
+  LOBBY_HOST_WARN_AT_MS,
   REVEAL_SECONDS,
   SKIP_VOTE_ID,
 } from "@/lib/types";
 import { generateRoomCode, RoomError, validateRoomCode } from "@/lib/room-code";
 import { uniquePlayerName } from "@/lib/player-name";
 import { getGameModule, resolveGameId } from "@/lib/games/registry";
+import {
+  loadAdminHistory,
+  loadAdminRoomLookup,
+  loadAdminAnalytics,
+  persistAnalyticsEvent,
+  persistGameLog,
+  persistGameLogAsync,
+  persistRoomClose,
+  persistRoomOpen,
+  type AdminAnalyticsPayload,
+} from "@/server/admin-persist";
 import {
   nextBotName,
   nextBotAvatarId,
@@ -82,15 +95,34 @@ import {
   type TttRoomState,
 } from "@/server/board-game-state";
 
+/** Games where voice is intentionally disabled (text chat may still work). */
 function isChatOnlyGame(gameId: string): boolean {
   return (
-    gameId === "five-alive" ||
+    gameId === "exploding-kittens" ||
     gameId === "detonation-cats" ||
     gameId === "spot-it" ||
-    gameId === "tic-tac-toe" ||
-    gameId === "connect-4"
+    gameId === "connect-4" ||
+    gameId === "battleship"
   );
 }
+import {
+  botBattleshipDelayMs,
+  applyBotBattleAction,
+  botNeedsReady,
+  pickBotFleet,
+} from "@/lib/games/battleship/bot-ai";
+import {
+  beginBattleship,
+  autoReadyRandomFleet,
+  fireStandardShot,
+  rematchBattleship,
+  submitFleetReady,
+  triggerPowerUp,
+} from "@/lib/games/battleship/actions";
+import { projectBattleshipPublic } from "@/lib/games/battleship/selectors";
+import type { BattleshipGameState } from "@/lib/games/battleship/state";
+import type { FleetPlacement } from "@/lib/games/battleship/placement";
+import type { PowerUpType, TorpedoDirection, Orientation } from "@/lib/games/battleship/powerups";
 import {
   countEvilAmong,
   eligibleVoters,
@@ -103,31 +135,68 @@ import {
 } from "@/lib/games/mafia-city/resolve";
 import {
   botFiveAliveDelayMs,
-  pickBotFiveAliveBombResponse,
   pickBotFiveAliveTurnPlay,
 } from "@/lib/games/5-alive/bot-ai";
 import {
-  botDcDelayMs,
+  bombResponderIds,
+  clearCenterToDiscard,
+  drawIntoHand,
+  livingCount,
+  nextLivingSeatId,
+  replenishDrawPile,
+  resolveFiveAliveTurnPlay,
+  shouldPenalizeOnEmptyHand,
+  isBombDefuseCard,
+  type FiveAliveSeat,
+} from "@/lib/games/5-alive/actions";
+import {
+  canPlayFiveAliveCardAtTotal,
+  handHasPlayableCard,
+  isFiveAliveActionCard,
+} from "@/lib/games/5-alive/rules";
+import {
+  buildDealStepsFromHands,
+  dealAnimationDurationMs,
+  computeDealStaggerMs,
+  type FiveAliveDealKind,
+} from "@/lib/games/5-alive/dealing";
+import {
+  fiveAliveBombResponseAnnouncement,
+  fiveAlivePassAnnouncement,
+  fiveAlivePlayAnnouncement,
+} from "@/lib/games/5-alive/announcements";
+import {
+  botEkDelayMs,
   pickBotDefusePosition,
   pickBotDiscardIndex,
-  pickBotDcPlay,
+  pickBotEkPlay,
+  pickBotFavorCard,
+  pickBotNope,
   pickBotStealTarget,
-} from "@/lib/games/detonation-cats/bot-ai";
+  pickBotTripleType,
+  shouldBotDraw,
+} from "@/lib/games/exploding-kittens/bot-ai";
 import {
-  advanceTurn,
-  createDetonationCatsState,
-  dcMaybeWin,
-  insertDefuse,
-  newLog,
-  pickFromDiscard,
-  resolveDraw,
-  resolvePlayedCards,
-  stealRandomCard,
+  createExplodingKittensState,
+  ekDraw,
+  ekFavorGive,
+  ekFavorTarget,
+  ekMaybeWin,
+  ekPickDiscard,
+  ekPlaceDefuse,
+  ekPlayCards,
+  ekPlayNope,
+  ekResolveNopeWindow,
+  ekStealTarget,
+  ekTripleDeclare,
+  ekBeginDrawPhase,
+  ekRandomDefuseIndex,
+  newEkLog,
   takeCardsFromHand,
-  toPublicDcCard,
   validatePlayCards,
-  type DetonationCatsRoomState,
-} from "@/server/detonation-cats-runtime";
+  type ExplodingKittensRoomState,
+} from "@/server/exploding-kittens-runtime";
+import { projectExplodingKittensPublic } from "@/lib/games/exploding-kittens/selectors";
 import { canAccessChannel } from "@/lib/chat-access";
 
 import {
@@ -189,11 +258,20 @@ interface Room {
     bombAwaitingPlayerId: string | null;
     bombActorId: string | null;
     bombResponderIds: string[];
+    repeatTurnForPlayerId: string | null;
+    shuffleRedealKeepTotal: boolean;
+    dealSeq: number;
+    dealKind: FiveAliveDealKind | null;
+    dealBanner: string | null;
+    dealSteps: import("@/lib/games/5-alive/dealing").FiveAliveDealStep[];
+    pendingTurnAfterDeal: string | null;
+    dealTimer: ReturnType<typeof setTimeout> | null;
   };
-  detonationCats?: DetonationCatsRoomState;
+  explodingKittens?: ExplodingKittensRoomState;
   spotIt?: SpotItRoomState;
   ttt?: TttRoomState;
   connect4?: Connect4RoomState;
+  battleship?: BattleshipGameState;
   boardWinnerId?: string | null;
   boardDraw?: boolean;
   timer: ReturnType<typeof setTimeout> | null;
@@ -201,12 +279,22 @@ interface Room {
   afkWarnedPlayerIds: string[];
   botTimers: ReturnType<typeof setTimeout>[];
   createdAt: number;
+  /** Lobby only: wall-clock when host-idle close should fire (survives timer loss). */
+  lobbyIdleDeadlineAt: number | null;
   voiceParticipants: Record<ChatChannel, Set<string>>;
+  voiceMutedIds: Set<string>;
 }
 
 function log(room: Room, text: string) {
   room.logs.push({ id: randomUUID(), text, at: Date.now() });
-  if (room.logs.length > 80) room.logs.splice(0, room.logs.length - 80);
+  if (room.logs.length > 150) room.logs.splice(0, room.logs.length - 150);
+  persistGameLog({
+    id: randomUUID(),
+    at: Date.now(),
+    level: "info",
+    roomId: room.id,
+    message: text,
+  });
 }
 
 function toPublicFiveAliveCard(card: FiveAliveCardInstance): PublicFiveAliveCard {
@@ -238,8 +326,388 @@ function dayVoteStats(room: Room) {
 export class GameRuntime {
   private rooms = new Map<string, Room>();
   private playerRoom = new Map<string, string>();
+  private lobbyIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private lobbyWarnTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
+  /** Append-only admin audit (in-memory; flushed to AdminActor when present). */
+  private adminRoomEvents: Array<{
+    id: string;
+    code: string;
+    hostName: string;
+    gameId: string;
+    openedAt: number;
+    closedAt: number | null;
+    reason: string | null;
+  }> = [];
+  private adminGameLogs: Array<{
+    id: string;
+    at: number;
+    level: "info" | "error" | "exception";
+    roomId?: string;
+    message: string;
+  }> = [];
 
   constructor(private io: IoServer) {}
+
+  /** Live rooms from memory; historic rooms/logs from AdminActor SQLite. */
+  async getAdminSnapshot() {
+    await this.sweepExpiredLobbies();
+    const history = await loadAdminHistory({ rooms: 500, logs: 2000 });
+    const liveCodes = new Set(
+      [...this.rooms.keys()].map((c) => c.toUpperCase())
+    );
+
+    // History can still say "open" after DO memory loss / redeploy — close those orphans.
+    const now = Date.now();
+    for (const evt of history.roomEvents) {
+      if (evt.closedAt != null) continue;
+      if (liveCodes.has(evt.code.toUpperCase())) continue;
+      evt.closedAt = now;
+      evt.reason = "server_lost";
+      await persistRoomClose(evt.code, now, "server_lost", {
+        ...evt,
+        closedAt: now,
+        reason: "server_lost",
+      });
+      this.trackAnalytics({
+        kind: "room_close",
+        roomId: evt.code,
+        gameId: evt.gameId,
+        at: now,
+      });
+      await persistGameLogAsync({
+        id: randomUUID(),
+        at: now,
+        level: "info",
+        roomId: evt.code,
+        message: `Room ${evt.code} marked closed (server_lost) — was open in history but not live in memory`,
+      });
+    }
+
+    const roomsOpen = [...this.rooms.values()].map((r) => {
+      const humans = r.players.filter((p) => !p.isBot);
+      const connected = humans.filter((p) => !!p.socketId).length;
+      return {
+        code: r.id,
+        gameId: r.gameId,
+        phase: r.phase,
+        paused: r.paused,
+        players: humans.length,
+        connected,
+        bots: r.players.filter((p) => p.isBot).length,
+        host: r.players.find((p) => p.isHost)?.name ?? null,
+        createdAt: r.createdAt,
+        lobbyIdleDeadlineAt: r.lobbyIdleDeadlineAt,
+      };
+    });
+
+    return {
+      roomsOpen,
+      roomEvents: history.roomEvents,
+      gameLogs: history.gameLogs,
+      health: {
+        ok: true,
+        roomCount: this.rooms.size,
+        at: Date.now(),
+        storedRoomEvents: history.totals.roomEvents,
+        storedGameLogs: history.totals.gameLogs,
+        socketHost: "sd-game.smokedog.workers.dev",
+      },
+    };
+  }
+
+  async getAdminRoomLookup(code: string) {
+    await this.sweepExpiredLobbies();
+    const normalized = code.trim().toUpperCase();
+    // Reconcile orphans so lookup status matches live memory.
+    await this.getAdminSnapshot();
+    const history = await loadAdminRoomLookup(normalized);
+    const live = this.getRoom(normalized);
+    return {
+      code: normalized,
+      found: history.found || !!live,
+      live: live
+        ? {
+            code: live.id,
+            gameId: live.gameId,
+            phase: live.phase,
+            paused: live.paused,
+            createdAt: live.createdAt,
+            lobbyIdleDeadlineAt: live.lobbyIdleDeadlineAt,
+            host: live.players.find((p) => p.isHost)?.name ?? null,
+            players: live.players.map((p) => ({
+              id: p.id,
+              name: p.name,
+              isHost: p.isHost,
+              isBot: !!p.isBot,
+              alive: p.alive,
+              connected: !!p.socketId,
+            })),
+          }
+        : null,
+      roomEvents: history.roomEvents,
+      gameLogs: history.gameLogs,
+    };
+  }
+
+  async getAdminAnalytics(opts?: {
+    range?: "day" | "week" | "month";
+    days?: number;
+  }): Promise<AdminAnalyticsPayload> {
+    return loadAdminAnalytics(opts);
+  }
+
+  trackAnalytics(event: {
+    kind:
+      | "page_view"
+      | "room_open"
+      | "room_join"
+      | "room_close"
+      | "game_start"
+      | "player_seen";
+    path?: string | null;
+    gameId?: string | null;
+    roomId?: string | null;
+    playerId?: string | null;
+    country?: string | null;
+    at?: number;
+  }) {
+    persistAnalyticsEvent({
+      id: randomUUID(),
+      at: event.at ?? Date.now(),
+      kind: event.kind,
+      path: event.path ?? null,
+      gameId: event.gameId ?? null,
+      roomId: event.roomId ?? null,
+      playerId: event.playerId ?? null,
+      country: event.country ?? null,
+    });
+  }
+
+  private pushAdminLog(
+    level: "info" | "error" | "exception",
+    message: string,
+    roomId?: string
+  ) {
+    const row = {
+      id: randomUUID(),
+      at: Date.now(),
+      level,
+      roomId,
+      message,
+    };
+    this.adminGameLogs.push(row);
+    if (this.adminGameLogs.length > 500) {
+      this.adminGameLogs.splice(0, this.adminGameLogs.length - 500);
+    }
+    persistGameLog(row);
+  }
+
+  private clearLobbyIdleTimers(roomId: string) {
+    const idle = this.lobbyIdleTimers.get(roomId);
+    if (idle) clearTimeout(idle);
+    this.lobbyIdleTimers.delete(roomId);
+    const warns = this.lobbyWarnTimers.get(roomId);
+    if (warns) {
+      for (const t of warns) clearTimeout(t);
+    }
+    this.lobbyWarnTimers.delete(roomId);
+  }
+
+  private lobbyHostConnected(room: Room): boolean {
+    const host = room.players.find((p) => p.isHost);
+    return !!host?.socketId;
+  }
+
+  /**
+   * Lobby presence is server socket only — never mouse/tab/client activity.
+   * If the seated host has no socket but another human is connected, hand host over
+   * so the room does not idle-close on an abandoned seat.
+   */
+  private promoteConnectedHostIfNeeded(room: Room) {
+    if (room.phase !== "lobby") return;
+    const host = room.players.find((p) => p.isHost);
+    if (!host || host.socketId) return;
+    const next = this.pickNextHumanHost(room, host.id);
+    if (!next?.socketId) return;
+    host.isHost = false;
+    next.isHost = true;
+    log(room, `${next.name} is now the host.`);
+  }
+
+  /**
+   * Sync lobby idle countdown to host socket presence (server-only).
+   * Starts the 5min close only when the current host has no socketId.
+   * Does NOT treat mouse/tab idle as away — a connected host waiting for
+   * players never starts this timer. Client activity must never call this
+   * to "reset" an idle clock while the host is online.
+   */
+  syncLobbyHostOfflineIdle(room: Room) {
+    if (room.phase !== "lobby") {
+      room.lobbyIdleDeadlineAt = null;
+      this.clearLobbyIdleTimers(room.id);
+      return;
+    }
+
+    if (this.lobbyHostConnected(room)) {
+      room.lobbyIdleDeadlineAt = null;
+      this.clearLobbyIdleTimers(room.id);
+      return;
+    }
+
+    // Host socket offline — start countdown if not already running; otherwise resume.
+    if (
+      room.lobbyIdleDeadlineAt != null &&
+      room.lobbyIdleDeadlineAt > Date.now() &&
+      (this.lobbyWarnTimers.has(room.id) || this.lobbyIdleTimers.has(room.id))
+    ) {
+      return;
+    }
+
+    this.scheduleLobbyHostIdleCountdown(room);
+  }
+
+  /** Schedule progressive host-only warnings + close from now (or remaining deadline). */
+  private scheduleLobbyHostIdleCountdown(room: Room) {
+    this.clearLobbyIdleTimers(room.id);
+
+    const now = Date.now();
+    const deadline =
+      room.lobbyIdleDeadlineAt != null && room.lobbyIdleDeadlineAt > now
+        ? room.lobbyIdleDeadlineAt
+        : now + LOBBY_HOST_IDLE_MS;
+    room.lobbyIdleDeadlineAt = deadline;
+    const elapsed = Math.max(0, LOBBY_HOST_IDLE_MS - (deadline - now));
+
+    const warnMessages: Record<1 | 2 | 3, string> = {
+      1: "Your connection dropped 30 seconds ago. This lobby closes after 5 minutes while the host is offline — reconnect to keep it open.",
+      2: "Your connection has been down for 1 minute. This lobby closes after 5 minutes while the host is offline — reconnect to keep it open.",
+      3: "This lobby is closing now after 5 minutes with the host offline.",
+    };
+
+    const warnTimers = LOBBY_HOST_WARN_AT_MS.flatMap((atMs, index) => {
+      const stage = (index + 1) as 1 | 2 | 3;
+      const isFinal = stage === 3;
+      const delay = atMs - elapsed;
+      if (delay < 0 && !isFinal) return [];
+      const wait = Math.max(0, delay);
+      return [
+        setTimeout(() => {
+          const current = this.getRoom(room.id);
+          if (!current || current.phase !== "lobby") return;
+          if (this.lobbyHostConnected(current)) {
+            current.lobbyIdleDeadlineAt = null;
+            this.clearLobbyIdleTimers(current.id);
+            return;
+          }
+          // Host is offline — they cannot receive socket events. Persist for reconnect toast.
+          // Warnings are host-only; other players never get these events.
+          const host = current.players.find((p) => p.isHost);
+          if (host?.socketId) {
+            this.io.to(host.socketId).emit("lobby:idleWarning", {
+              stage,
+              closesInMs: Math.max(0, (current.lobbyIdleDeadlineAt ?? 0) - Date.now()),
+              message: warnMessages[stage],
+              ...(isFinal ? { isFinal: true } : {}),
+            });
+          }
+          if (isFinal) {
+            setTimeout(() => {
+              void this.sweepExpiredLobbies();
+            }, 1500);
+          }
+        }, wait),
+      ];
+    });
+    this.lobbyWarnTimers.set(room.id, warnTimers);
+
+    const closeDelay = Math.max(0, deadline - now) + 5000;
+    this.lobbyIdleTimers.set(
+      room.id,
+      setTimeout(() => {
+        void this.sweepExpiredLobbies();
+      }, closeDelay)
+    );
+  }
+
+  /** Close lobbies past idle deadline (works even if setTimeout was lost on DO hibernate). */
+  private async sweepExpiredLobbies() {
+    const now = Date.now();
+    const expired = [...this.rooms.values()].filter((r) => {
+      if (r.phase !== "lobby") return false;
+      if (this.lobbyHostConnected(r)) {
+        // Host came back — clear stale deadline.
+        r.lobbyIdleDeadlineAt = null;
+        this.clearLobbyIdleTimers(r.id);
+        return false;
+      }
+      return r.lobbyIdleDeadlineAt != null && r.lobbyIdleDeadlineAt <= now;
+    });
+    for (const room of expired) {
+      await this.closeLobby(room, "host_afk");
+    }
+  }
+
+  private async closeLobby(room: Room, reason: string) {
+    this.clearLobbyIdleTimers(room.id);
+    room.lobbyIdleDeadlineAt = null;
+    this.clearTimer(room);
+    this.clearBotTimers(room);
+    const host = room.players.find((p) => p.isHost);
+    const closedAt = Date.now();
+    const evt = this.adminRoomEvents.find(
+      (e) => e.code === room.id && e.closedAt == null
+    );
+    const openRow = evt ?? {
+      id: randomUUID(),
+      code: room.id,
+      hostName: host?.name ?? "?",
+      gameId: room.gameId,
+      openedAt: room.createdAt,
+      closedAt: null as number | null,
+      reason: null as string | null,
+    };
+    openRow.closedAt = closedAt;
+    openRow.reason = reason;
+    if (!evt) this.adminRoomEvents.push(openRow);
+
+    // Await so DO hibernation cannot cancel the SQLite write.
+    await persistRoomClose(room.id, closedAt, reason, {
+      ...openRow,
+      closedAt,
+      reason,
+    });
+    this.trackAnalytics({
+      kind: "room_close",
+      roomId: room.id,
+      gameId: room.gameId,
+      at: closedAt,
+    });
+    await persistGameLogAsync({
+      id: randomUUID(),
+      at: closedAt,
+      level: "info",
+      roomId: room.id,
+      message: `Lobby ${room.id} closed (${reason})`,
+    });
+
+    for (const p of room.players) {
+      this.playerRoom.delete(p.id);
+      if (p.socketId) {
+        const message =
+          reason === "host_afk"
+            ? "Lobby closed — host was offline too long."
+            : reason === "host_quit"
+              ? "Lobby closed — host left."
+              : "Lobby closed — no players remaining.";
+        this.io.to(p.socketId).emit("room:error", {
+          message,
+          code: "LOBBY_CLOSED",
+        });
+      }
+    }
+    this.rooms.delete(room.id);
+    this.broadcastLobbies();
+  }
 
   private getRoom(roomId: string): Room | undefined {
     return this.rooms.get(roomId.toUpperCase());
@@ -248,6 +716,53 @@ export class GameRuntime {
   private requireHost(room: Room, playerId: string): Player | null {
     const p = room.players.find((x) => x.id === playerId);
     return p?.isHost ? p : null;
+  }
+
+  /** Prefer a connected human; otherwise any human. Never bots. */
+  private pickNextHumanHost(
+    room: Room,
+    excludingPlayerId: string
+  ): Player | null {
+    return (
+      room.players.find(
+        (p) => p.id !== excludingPlayerId && !p.isBot && !!p.socketId
+      ) ??
+      room.players.find((p) => p.id !== excludingPlayerId && !p.isBot) ??
+      null
+    );
+  }
+
+  /**
+   * If `leaving` is host, move host to another human before they are removed.
+   * Returns the new host, or null if none available.
+   */
+  private transferHostFrom(
+    room: Room,
+    leaving: Player
+  ): Player | null {
+    if (!leaving.isHost) return null;
+    const next = this.pickNextHumanHost(room, leaving.id);
+    if (!next) return null;
+    leaving.isHost = false;
+    next.isHost = true;
+    log(room, `${next.name} is now the host.`);
+    return next;
+  }
+
+  /** After removals: repair 0 or multiple human hosts. Never promote bots. */
+  private ensureHumanHost(room: Room) {
+    const humans = room.players.filter((p) => !p.isBot);
+    if (humans.length === 0) {
+      for (const p of room.players) p.isHost = false;
+      return;
+    }
+    const hosts = humans.filter((p) => p.isHost);
+    if (hosts.length === 1) return;
+    for (const p of room.players) p.isHost = false;
+    const next =
+      humans.find((p) => !!p.socketId) ?? humans[0];
+    next.isHost = true;
+    log(room, `${next.name} is now the host.`);
   }
 
   private playerBySocket(socketId: string): { room: Room; player: Player } | null {
@@ -298,6 +813,18 @@ export class GameRuntime {
     };
   }
 
+  private fiveAliveAnnounce(
+    room: Room,
+    ann: { title: string; detail: string; tone?: "info" | "good" | "bad" }
+  ) {
+    this.setAnnouncement(
+      room,
+      ann.tone ?? "info",
+      ann.title,
+      ann.detail
+    );
+  }
+
   private addChronicle(
     room: Room,
     phase: "night" | "day",
@@ -329,7 +856,10 @@ export class GameRuntime {
     const revealAll = room.phase === "gameover";
     const viewerIsMafia = you?.role ? isMafiaRole(you.role) : false;
     const five = room.gameId === "five-alive" ? room.fiveAlive : undefined;
-    const dc = room.gameId === "detonation-cats" ? room.detonationCats : undefined;
+    const ek =
+      room.gameId === "exploding-kittens" || room.gameId === "detonation-cats"
+        ? room.explodingKittens
+        : undefined;
     const rolePreview =
       room.phase === "lobby"
         ? normalizeRoleDistribution(
@@ -385,6 +915,7 @@ export class GameRuntime {
       dayVotesIn: dayVoteStats(room).votesIn,
       dayVotesNeeded: dayVoteStats(room).votesNeeded,
       voiceParticipants: this.publicVoiceParticipants(room),
+      voiceMutedIds: [...room.voiceMutedIds],
       autoPlayerCount: you?.isHost
         ? room.players.filter((p) => p.isBot).length
         : 0,
@@ -419,58 +950,80 @@ export class GameRuntime {
         playerCanDayVote(you) &&
         room.daySubPhase === "vote",
       fiveAlive: five
-        ? {
-            runningTotal: five.runningTotal,
-            direction: five.direction,
-            turnPlayerId: five.turnPlayerId,
-            skipNext: five.skipNext,
-            pendingDrawCount: five.pendingDrawCount,
-            yourHand: (five.handsByPlayerId[you?.id ?? ""] ?? []).map(
-              toPublicFiveAliveCard
-            ),
-            bombAwaitingPlayerId: five.bombAwaitingPlayerId,
-            bombActorId: five.bombActorId,
-            bombResponderIds: five.bombResponderIds,
-            drawPileCount: five.drawDeck.length,
-            discardPileCount: five.discardPile.length,
-            centerPileCount: five.centerPile.length,
-            centerTopCard:
-              five.centerPile.length > 0
-                ? toPublicFiveAliveCard(
-                    five.centerPile[five.centerPile.length - 1] as FiveAliveCardInstance
-                  )
-                : null,
-          }
+        ? (() => {
+            const isDealing = room.phase === "fivealive_dealing";
+            const viewerHand = five.handsByPlayerId[you?.id ?? ""] ?? [];
+            const opponentHandCounts: Record<string, number> = {};
+            const handCounts: Record<string, number> = {};
+            for (const [pid, hand] of Object.entries(five.handsByPlayerId)) {
+              handCounts[pid] = hand.length;
+              if (pid !== you?.id) opponentHandCounts[pid] = hand.length;
+            }
+            const dealEvent =
+              isDealing && five.dealKind
+                ? {
+                    seq: five.dealSeq,
+                    kind: five.dealKind,
+                    banner: five.dealBanner,
+                    staggerMs: computeDealStaggerMs(five.dealSteps.length),
+                    sourceCount: five.dealSteps.length,
+                    steps: five.dealSteps.map((step) => {
+                      const raw =
+                        step.playerId === you?.id
+                          ? viewerHand[step.cardIndex]
+                          : undefined;
+                      const card = raw
+                        ? toPublicFiveAliveCard(raw as FiveAliveCardInstance)
+                        : undefined;
+                      return card
+                        ? { playerId: step.playerId, cardIndex: step.cardIndex, card }
+                        : { playerId: step.playerId, cardIndex: step.cardIndex };
+                    }),
+                  }
+                : null;
+
+            return {
+              runningTotal: five.runningTotal,
+              direction: five.direction,
+              turnPlayerId: five.pendingTurnAfterDeal ?? five.turnPlayerId,
+              skipNext: five.skipNext,
+              pendingDrawCount: five.pendingDrawCount,
+              yourHand: isDealing
+                ? []
+                : viewerHand.map(toPublicFiveAliveCard),
+              bombAwaitingPlayerId: five.bombAwaitingPlayerId,
+              bombActorId: five.bombActorId,
+              bombResponderIds: five.bombResponderIds,
+              // During shuffle deal, show the collected pool size as the deal deck.
+              drawPileCount:
+                isDealing && five.dealKind === "shuffle"
+                  ? five.dealSteps.length
+                  : five.drawDeck.length,
+              discardPileCount: five.discardPile.length,
+              centerPileCount: isDealing ? 0 : five.centerPile.length,
+              centerTopCard:
+                isDealing || five.centerPile.length === 0
+                  ? null
+                  : toPublicFiveAliveCard(
+                      five.centerPile[five.centerPile.length - 1] as FiveAliveCardInstance
+                    ),
+              centerRecentCards:
+                isDealing || five.centerPile.length === 0
+                  ? []
+                  : five.centerPile
+                      .slice(-3)
+                      .map((c) =>
+                        toPublicFiveAliveCard(c as FiveAliveCardInstance)
+                      ),
+              dealEvent,
+              handCounts,
+              opponentHandCounts,
+              isDealing,
+            };
+          })()
         : undefined,
-      detonationCats: dc
-        ? {
-            turnPlayerId: dc.turnPlayerId,
-            pendingTurns: dc.pendingTurns,
-            yourHand: (dc.handsByPlayerId[you?.id ?? ""] ?? []).map(toPublicDcCard),
-            drawPileCount: dc.drawDeck.length,
-            discardCount: dc.discardPile.length,
-            discardTop:
-              dc.discardPile.length > 0
-                ? toPublicDcCard(dc.discardPile[dc.discardPile.length - 1]!)
-                : null,
-            seeFutureCards:
-              you?.id === dc.turnPlayerId && dc.seeFuturePeek
-                ? dc.seeFuturePeek.map(toPublicDcCard)
-                : null,
-            awaitingDefuse:
-              room.phase === "ek_defuse" && dc.defusePlayerId === you?.id,
-            awaitingPickDiscard:
-              room.phase === "ek_pick_discard" &&
-              dc.pickDiscardPlayerId === you?.id,
-            awaitingStealTarget:
-              room.phase === "ek_steal" && dc.stealActorId === you?.id,
-            stealTargetIds:
-              room.phase === "ek_steal" && dc.stealActorId === you?.id
-                ? room.players
-                    .filter((p) => p.alive && p.id !== you?.id)
-                    .map((p) => p.id)
-                : [],
-          }
+      explodingKittens: ek
+        ? projectExplodingKittensPublic(ek, you?.id ?? null)
         : undefined,
       spotIt:
         room.spotIt && room.gameId === "spot-it"
@@ -487,6 +1040,10 @@ export class GameRuntime {
       connect4:
         room.connect4 && room.gameId === "connect-4"
           ? toPublicConnect4(room.connect4)
+          : undefined,
+      battleship:
+        room.battleship && room.gameId === "battleship"
+          ? projectBattleshipPublic(room.battleship, you?.id ?? null)
           : undefined,
       boardWinnerId: revealAll ? room.boardWinnerId ?? null : undefined,
       boardDraw: revealAll ? !!room.boardDraw : undefined,
@@ -601,8 +1158,10 @@ export class GameRuntime {
   }
 
   broadcastLobbies() {
-    this.io.to("lobby-browser").emit("lobbies:list", {
-      lobbies: this.listOpenLobbies(),
+    void this.sweepExpiredLobbies().then(() => {
+      this.io.to("lobby-browser").emit("lobbies:list", {
+        lobbies: this.listOpenLobbies(),
+      });
     });
   }
 
@@ -705,6 +1264,8 @@ export class GameRuntime {
       const five = room.fiveAlive;
       if (!five) return;
 
+      if (room.phase === "fivealive_dealing") return;
+
       if (room.phase === "fivealive_turn" && five.turnPlayerId) {
         const bot = room.players.find(
           (p) => p.id === five.turnPlayerId && p.isBot && p.alive
@@ -717,58 +1278,67 @@ export class GameRuntime {
           const currentHand = five.handsByPlayerId[bot.id] ?? [];
           const play = pickBotFiveAliveTurnPlay(currentHand, five.runningTotal);
           if (!play) return;
-          this.submitFiveAlivePlayCard(
-            room.id,
-            bot.id,
-            play.cardId,
-            play.wildValue
-          );
+          if (play.pass) {
+            this.submitFiveAlivePlayCard(room.id, bot.id, null, undefined, true);
+          } else {
+            this.submitFiveAlivePlayCard(room.id, bot.id, play.cardId);
+          }
         });
         return;
       }
 
       if (room.phase === "fivealive_bomb" && five.bombAwaitingPlayerId) {
-        const bot = room.players.find(
-          (p) =>
-            p.id === five.bombAwaitingPlayerId && p.isBot && p.alive
-        );
-        if (!bot) return;
-        const wait = botFiveAliveDelayMs();
+        // Auto-resolve for everyone: play number 0 if held, else lose 1 life.
+        const awaitingId = five.bombAwaitingPlayerId;
+        const wait = 900 + Math.floor(Math.random() * 400);
         this.delayBot(room, wait, () => {
-          if (room.phase !== "fivealive_bomb" || room.paused || !bot.alive) return;
-          if (five.bombAwaitingPlayerId !== bot.id) return;
-          const currentHand = five.handsByPlayerId[bot.id] ?? [];
-          const response = pickBotFiveAliveBombResponse(currentHand);
-          if ("pass" in response) {
-            this.submitFiveAlivePlayCard(room.id, bot.id, null, undefined, true);
-          } else {
-            this.submitFiveAlivePlayCard(room.id, bot.id, response.cardId);
-          }
+          if (room.phase !== "fivealive_bomb" || room.paused) return;
+          if (five.bombAwaitingPlayerId !== awaitingId) return;
+          this.fiveAliveAutoResolveBombResponse(room, awaitingId);
         });
       }
       return;
     }
 
-    if (room.gameId === "detonation-cats") {
-      const dc = room.detonationCats;
-      if (!dc) return;
+    if (this.isEkGame(room.gameId)) {
+      const ek = room.explodingKittens;
+      if (!ek) return;
 
-      if (room.phase === "ek_turn" && dc.turnPlayerId) {
+      if (ek.nopeWindowEndsAt && room.phase === "ek_turn") {
+        for (const bot of room.players.filter((p) => p.isBot && p.alive)) {
+          const hand = ek.handsByPlayerId[bot.id] ?? [];
+          const nopeId = pickBotNope(hand);
+          if (!nopeId) continue;
+          this.delayBot(room, botEkDelayMs(), () => {
+            if (room.paused || !ek.nopeWindowEndsAt) return;
+            this.submitEkNope(room.id, bot.id, nopeId);
+          });
+        }
+        return;
+      }
+
+      if (room.phase === "ek_turn" && ek.turnPlayerId) {
         const bot = room.players.find(
-          (p) => p.id === dc.turnPlayerId && p.isBot && p.alive
+          (p) => p.id === ek.turnPlayerId && p.isBot && p.alive
         );
         if (!bot) return;
-        this.delayBot(room, botDcDelayMs(), () => {
+        this.delayBot(room, botEkDelayMs(), () => {
           if (room.phase !== "ek_turn" || room.paused || !bot.alive) return;
-          if (dc.turnPlayerId !== bot.id) return;
-          const hand = dc.handsByPlayerId[bot.id] ?? [];
-          const play = pickBotDcPlay(hand);
+          if (ek.turnPlayerId !== bot.id || ek.nopeWindowEndsAt) return;
+          const hand = ek.handsByPlayerId[bot.id] ?? [];
+
+          if (ek.subPhase === "draw" || shouldBotDraw(ek, bot.id)) {
+            this.submitEkDraw(room.id, bot.id);
+            return;
+          }
+
+          const play = pickBotEkPlay(hand);
           if (play) {
             this.submitEkPlayCards(room.id, bot.id, play.cardIds);
-            if (play.endTurn) {
+            if (play.draw) {
               setTimeout(() => {
-                this.submitEkEndTurn(room.id, bot.id);
-              }, 400);
+                this.submitEkDraw(room.id, bot.id);
+              }, 500);
             }
           } else {
             this.submitEkEndTurn(room.id, bot.id);
@@ -777,47 +1347,106 @@ export class GameRuntime {
         return;
       }
 
-      if (room.phase === "ek_defuse" && dc.defusePlayerId) {
+      if (room.phase === "ek_defuse" && ek.defusePlayerId) {
         const bot = room.players.find(
-          (p) => p.id === dc.defusePlayerId && p.isBot && p.alive
+          (p) => p.id === ek.defusePlayerId && p.isBot && p.alive
         );
         if (!bot) return;
-        this.delayBot(room, botDcDelayMs(), () => {
+        this.delayBot(room, botEkDelayMs(), () => {
           this.submitEkPlaceDefuse(
             room.id,
             bot.id,
-            pickBotDefusePosition(dc.drawDeck.length)
+            pickBotDefusePosition(ek.drawDeck.length)
           );
         });
         return;
       }
 
-      if (room.phase === "ek_pick_discard" && dc.pickDiscardPlayerId) {
+      if (room.phase === "ek_pick_discard" && ek.pickDiscardPlayerId) {
         const bot = room.players.find(
-          (p) => p.id === dc.pickDiscardPlayerId && p.isBot && p.alive
+          (p) => p.id === ek.pickDiscardPlayerId && p.isBot && p.alive
         );
         if (!bot) return;
-        this.delayBot(room, botDcDelayMs(), () => {
+        this.delayBot(room, botEkDelayMs(), () => {
           this.submitEkPickDiscard(
             room.id,
             bot.id,
-            pickBotDiscardIndex(dc.discardPile.length)
+            pickBotDiscardIndex(ek.discardPile.length)
           );
         });
         return;
       }
 
-      if (room.phase === "ek_steal" && dc.stealActorId) {
+      if (room.phase === "ek_steal" && ek.stealActorId) {
         const bot = room.players.find(
-          (p) => p.id === dc.stealActorId && p.isBot && p.alive
+          (p) => p.id === ek.stealActorId && p.isBot && p.alive
         );
         if (!bot) return;
-        this.delayBot(room, botDcDelayMs(), () => {
+        this.delayBot(room, botEkDelayMs(), () => {
+          const counts: Record<string, number> = {};
+          for (const [pid, h] of Object.entries(ek.handsByPlayerId)) {
+            counts[pid] = h.length;
+          }
           const target = pickBotStealTarget(
             room.players.filter((p) => p.alive).map((p) => p.id),
-            bot.id
+            bot.id,
+            counts
           );
           if (target) this.submitEkStealTarget(room.id, bot.id, target);
+        });
+        return;
+      }
+
+      if (room.phase === "ek_favor" && ek.favorToId) {
+        const bot = room.players.find(
+          (p) => p.id === ek.favorToId && p.isBot && p.alive
+        );
+        if (!bot) return;
+        this.delayBot(room, botEkDelayMs(), () => {
+          const hand = ek.handsByPlayerId[bot.id] ?? [];
+          const cardId = pickBotFavorCard(hand);
+          if (cardId) this.submitEkFavorGive(room.id, bot.id, cardId);
+        });
+        return;
+      }
+
+      if (
+        room.phase === "ek_favor" &&
+        ek.favorFromId &&
+        ek.pendingAction?.kind === "favor_pick_target"
+      ) {
+        const bot = room.players.find(
+          (p) => p.id === ek.favorFromId && p.isBot && p.alive
+        );
+        if (!bot) return;
+        this.delayBot(room, botEkDelayMs(), () => {
+          const others = room.players.filter(
+            (p) => p.alive && p.id !== bot.id
+          );
+          const target = others[0];
+          if (target) this.submitEkFavorTarget(room.id, bot.id, target.id);
+        });
+        return;
+      }
+
+      if (room.phase === "ek_triple" && ek.tripleActorId) {
+        const bot = room.players.find(
+          (p) => p.id === ek.tripleActorId && p.isBot && p.alive
+        );
+        if (!bot) return;
+        this.delayBot(room, botEkDelayMs(), () => {
+          const others = room.players.filter(
+            (p) => p.alive && p.id !== bot.id
+          );
+          const target = others[0];
+          if (target) {
+            this.submitEkTripleDeclare(
+              room.id,
+              bot.id,
+              target.id,
+              pickBotTripleType(ek.handsByPlayerId[bot.id] ?? []) ?? "skip"
+            );
+          }
         });
       }
       return;
@@ -875,6 +1504,34 @@ export class GameRuntime {
         if (col == null) return;
         this.submitConnect4Drop(room.id, turn.id, col);
       });
+      return;
+    }
+
+    if (room.gameId === "battleship" && room.battleship) {
+      const bs = room.battleship;
+      if (room.phase === "battleship_setup") {
+        for (const bot of room.players.filter((p) => p.isBot)) {
+          if (!botNeedsReady(bs, bot.id)) continue;
+          this.delayBot(room, botBattleshipDelayMs(), () => {
+            if (room.phase !== "battleship_setup" || room.paused) return;
+            this.submitBattleshipReady(room.id, bot.id, pickBotFleet());
+          });
+        }
+        return;
+      }
+      if (room.phase === "battleship_play" && bs.turnPlayerId) {
+        const bot = room.players.find(
+          (p) => p.id === bs.turnPlayerId && p.isBot
+        );
+        if (!bot) return;
+        this.delayBot(room, botBattleshipDelayMs(), () => {
+          if (room.phase !== "battleship_play" || room.paused || !room.battleship)
+            return;
+          if (room.battleship.turnPlayerId !== bot.id) return;
+          room.battleship = applyBotBattleAction(room.battleship, bot.id);
+          this.afterBattleshipAction(room);
+        });
+      }
       return;
     }
 
@@ -964,6 +1621,7 @@ export class GameRuntime {
   }
 
   private removeFromAllVoice(room: Room, playerId: string) {
+    room.voiceMutedIds.delete(playerId);
     for (const channel of ["town", "mafia", "graveyard"] as ChatChannel[]) {
       if (!room.voiceParticipants[channel].delete(playerId)) continue;
       this.broadcastVoiceParticipants(room, channel);
@@ -1016,6 +1674,7 @@ export class GameRuntime {
     avatarId: number;
     gameId?: string;
     localMode?: boolean;
+    country?: string | null;
   }): Room {
     this.blockIfSeatedElsewhere(opts.playerId);
     this.removeSpectatorEverywhere(opts.playerId);
@@ -1075,7 +1734,9 @@ export class GameRuntime {
       afkWarnedPlayerIds: [],
       botTimers: [],
       createdAt: Date.now(),
+      lobbyIdleDeadlineAt: null,
       voiceParticipants: emptyVoiceChannels(),
+      voiceMutedIds: new Set(),
     };
 
     if (mod.id === "mafia-city" && typeof opts.localMode === "boolean") {
@@ -1084,6 +1745,42 @@ export class GameRuntime {
 
     this.rooms.set(code, room);
     this.playerRoom.set(opts.playerId, code);
+    this.adminRoomEvents.push({
+      id: randomUUID(),
+      code,
+      hostName: opts.name,
+      gameId: room.gameId,
+      openedAt: room.createdAt,
+      closedAt: null,
+      reason: null,
+    });
+    persistRoomOpen({
+      id: this.adminRoomEvents[this.adminRoomEvents.length - 1]!.id,
+      code,
+      hostName: opts.name,
+      gameId: room.gameId,
+      openedAt: room.createdAt,
+      closedAt: null,
+      reason: null,
+    });
+    this.trackAnalytics({
+      kind: "room_open",
+      roomId: code,
+      gameId: room.gameId,
+      playerId: opts.playerId,
+      country: opts.country,
+      at: room.createdAt,
+    });
+    this.trackAnalytics({
+      kind: "player_seen",
+      roomId: code,
+      gameId: room.gameId,
+      playerId: opts.playerId,
+      country: opts.country,
+      at: room.createdAt,
+    });
+    this.pushAdminLog("info", `Lobby ${code} opened by ${opts.name}`, code);
+    // Host is socket-connected at create — no offline idle countdown.
     return room;
   }
 
@@ -1093,6 +1790,7 @@ export class GameRuntime {
     playerId: string;
     name: string;
     avatarId: number;
+    country?: string | null;
   }): Room {
     const parsedJoin = validateRoomCode(opts.roomId);
     this.blockIfSeatedElsewhere(
@@ -1126,6 +1824,10 @@ export class GameRuntime {
       if (room.phase === "lobby") existing.ready = true;
       this.playerRoom.set(opts.playerId, room.id);
       this.joinSocketRooms(opts.socketId, room, existing);
+      if (room.phase === "lobby") {
+        this.promoteConnectedHostIfNeeded(room);
+        this.syncLobbyHostOfflineIdle(room);
+      }
       return room;
     }
 
@@ -1158,6 +1860,22 @@ export class GameRuntime {
     });
     this.playerRoom.set(opts.playerId, room.id);
     this.joinSocketRooms(opts.socketId, room, room.players[room.players.length - 1]);
+    this.promoteConnectedHostIfNeeded(room);
+    this.syncLobbyHostOfflineIdle(room);
+    this.trackAnalytics({
+      kind: "room_join",
+      roomId: room.id,
+      gameId: room.gameId,
+      playerId: opts.playerId,
+      country: opts.country,
+    });
+    this.trackAnalytics({
+      kind: "player_seen",
+      roomId: room.id,
+      gameId: room.gameId,
+      playerId: opts.playerId,
+      country: opts.country,
+    });
     return room;
   }
 
@@ -1181,6 +1899,10 @@ export class GameRuntime {
     if (room.phase === "lobby") player.ready = true;
     this.playerRoom.set(opts.playerId, room.id);
     this.joinSocketRooms(opts.socketId, room, player);
+    if (room.phase === "lobby") {
+      this.promoteConnectedHostIfNeeded(room);
+      this.syncLobbyHostOfflineIdle(room);
+    }
     return room;
   }
 
@@ -1252,7 +1974,34 @@ export class GameRuntime {
       room.settings.nightSeconds = Math.min(120, Math.max(15, patch.nightSeconds));
     }
     if (typeof patch.daySeconds === "number") {
-      room.settings.daySeconds = Math.min(200, Math.max(20, patch.daySeconds));
+      const isBoardTurnGame =
+        room.gameId === "tic-tac-toe" || room.gameId === "connect-4";
+      const minDay =
+        room.gameId === "five-alive" || isBoardTurnGame ? 10 : 20;
+      const maxDay =
+        room.gameId === "five-alive" ? 120 : isBoardTurnGame ? 60 : 200;
+      room.settings.daySeconds = Math.min(
+        maxDay,
+        Math.max(minDay, patch.daySeconds)
+      );
+      if (
+        midGame &&
+        room.gameId === "five-alive" &&
+        !room.paused &&
+        room.phaseEndsAt &&
+        (room.phase === "fivealive_turn" || room.phase === "fivealive_bomb")
+      ) {
+        room.phaseEndsAt = Date.now() + room.settings.daySeconds * 1000;
+        this.schedule(room);
+      } else if (
+        midGame &&
+        room.gameId === "five-alive" &&
+        room.paused &&
+        room.pausedRemainingMs != null &&
+        (room.phase === "fivealive_turn" || room.phase === "fivealive_bomb")
+      ) {
+        room.pausedRemainingMs = room.settings.daySeconds * 1000;
+      }
     }
     if (!midGame) {
       if (patch.vigilanteBullets === null) {
@@ -1273,6 +2022,7 @@ export class GameRuntime {
         room.settings.localMode = patch.localMode;
       }
     }
+    // Settings changes do not affect host-offline idle (socket presence only).
     this.emitRoom(room);
   }
 
@@ -1333,7 +2083,7 @@ export class GameRuntime {
     this.emitRoom(room);
   }
 
-  startGame(roomId: string, playerId: string) {
+  startGame(roomId: string, playerId: string, country?: string | null) {
     const room = this.getRoom(roomId);
     if (!room) throw new Error("Room not found");
     if (!this.requireHost(room, playerId)) throw new Error("Only the host can start");
@@ -1342,13 +2092,23 @@ export class GameRuntime {
     if (room.players.length < mod.minPlayers) {
       throw new Error(`Need at least ${mod.minPlayers} players`);
     }
+    this.clearLobbyIdleTimers(room.id);
+    room.lobbyIdleDeadlineAt = null;
+
+    this.trackAnalytics({
+      kind: "game_start",
+      roomId: room.id,
+      gameId: room.gameId,
+      playerId,
+      country,
+    });
 
     if (room.gameId === "five-alive") {
       this.startFiveAlive(room);
       return;
     }
-    if (room.gameId === "detonation-cats") {
-      this.startDetonationCats(room);
+    if (this.isEkGame(room.gameId)) {
+      this.startExplodingKittens(room);
       return;
     }
     if (room.gameId === "spot-it") {
@@ -1361,6 +2121,10 @@ export class GameRuntime {
     }
     if (room.gameId === "connect-4") {
       this.startConnect4(room);
+      return;
+    }
+    if (room.gameId === "battleship") {
+      this.startBattleship(room);
       return;
     }
 
@@ -1434,6 +2198,14 @@ export class GameRuntime {
       bombAwaitingPlayerId: null,
       bombActorId: null,
       bombResponderIds: [],
+      repeatTurnForPlayerId: null,
+      shuffleRedealKeepTotal: true,
+      dealSeq: 0,
+      dealKind: null,
+      dealBanner: null,
+      dealSteps: [],
+      pendingTurnAfterDeal: null,
+      dealTimer: null,
     };
 
     const five = room.fiveAlive;
@@ -1454,15 +2226,7 @@ export class GameRuntime {
     const drawFromDeck = (count: number) => {
       const out: FiveAliveCardInstance[] = [];
       while (out.length < count) {
-        if (five.drawDeck.length === 0) {
-          if (five.discardPile.length > 0) {
-            five.drawDeck = shuffle(five.discardPile);
-            five.discardPile = [];
-          } else {
-            // Should never happen during normal play, but keep the game from crashing.
-            five.drawDeck = buildFiveAliveDeck();
-          }
-        }
+        replenishDrawPile(five, buildFiveAliveDeck);
         const drawn = five.drawDeck.pop();
         if (drawn) out.push(drawn);
       }
@@ -1474,17 +2238,68 @@ export class GameRuntime {
       five.handsByPlayerId[p.id] = drawFromDeck(FIVE_ALIVE_HAND_SIZE);
     }
 
-    // Turn order: first seat in `room.players` order starts.
-    const first = room.players.find((p) => (p.lives ?? 0) > 0);
+    // Turn order: random living seat starts the match.
+    const living = room.players.filter((p) => (p.lives ?? 0) > 0);
+    const first =
+      living.length > 0
+        ? living[Math.floor(Math.random() * living.length)]
+        : undefined;
     five.turnPlayerId = first?.id ?? null;
 
     log(room, "5 Alive begins: keep the running total at or below 21.");
-    this.setPhase(room, "fivealive_turn", room.settings.daySeconds);
-    this.scheduleBots(room);
-    this.emitRoom(room);
+    this.beginFiveAliveDealing(
+      room,
+      "initial",
+      "5 Alive — dealing hands…",
+      five.turnPlayerId
+    );
   }
 
-  private startDetonationCats(room: Room) {
+  private isEkGame(gameId: string): boolean {
+    return gameId === "exploding-kittens" || gameId === "detonation-cats";
+  }
+
+  private ekPlayerRefs(room: Room) {
+    return room.players.map((p) => ({
+      id: p.id,
+      name: p.name,
+      alive: p.alive,
+    }));
+  }
+
+  private applyEkResult(room: Room, result: import("@/lib/games/exploding-kittens/state").EkActionResult) {
+    for (const line of result.logs) {
+      room.logs.push(newEkLog(line));
+    }
+    const ek = room.explodingKittens;
+    if (result.gameOver && ek?.winnerId) {
+      room.boardWinnerId = ek.winnerId;
+      const winner = room.players.find((p) => p.id === ek.winnerId);
+      log(room, `${winner?.name ?? "Someone"} wins Exploding Kittens!`);
+      this.setPhase(room, "gameover", null);
+      this.emitRoom(room);
+      return true;
+    }
+    this.setPhase(room, result.phase ?? "ek_turn", room.settings.daySeconds);
+    this.scheduleBots(room);
+    this.emitRoom(room);
+    return false;
+  }
+
+  private scheduleEkNopeResolve(room: Room) {
+    const ek = room.explodingKittens;
+    if (!ek?.nopeWindowEndsAt) return;
+    const wait = Math.max(50, ek.nopeWindowEndsAt - Date.now() + 50);
+    this.delayBot(room, wait, () => {
+      if (room.paused || !this.isEkGame(room.gameId)) return;
+      const state = room.explodingKittens;
+      if (!state?.nopeWindowEndsAt || Date.now() < state.nopeWindowEndsAt) return;
+      const result = ekResolveNopeWindow(state, this.ekPlayerRefs(room));
+      this.applyEkResult(room, result);
+    });
+  }
+
+  private startExplodingKittens(room: Room) {
     room.cycle = 1;
     room.winner = null;
     room.logs = [];
@@ -1506,168 +2321,109 @@ export class GameRuntime {
       this.leaveMafiaRooms(p, room.id);
     }
 
-    room.detonationCats = createDetonationCatsState(
-      room.players.map((p) => ({ id: p.id, name: p.name, alive: p.alive }))
-    );
+    room.explodingKittens = createExplodingKittensState(this.ekPlayerRefs(room));
 
-    log(room, "Detonation Cats begins — don't draw the boom.");
+    log(room, "Exploding Kittens begins — don't draw the kitten.");
     this.setPhase(room, "ek_turn", room.settings.daySeconds);
     this.scheduleBots(room);
     this.emitRoom(room);
   }
 
-  private dcMaybeWinRoom(room: Room): boolean {
-    const dc = room.detonationCats;
-    if (!dc) return false;
-    const winnerId = dcMaybeWin(
-      room.players.map((p) => ({ id: p.id, name: p.name, alive: p.alive })),
-      dc.turnOrder
-    );
+  private ekMaybeWinRoom(room: Room): boolean {
+    const ek = room.explodingKittens;
+    if (!ek) return false;
+    const winnerId = ekMaybeWin(this.ekPlayerRefs(room), ek.turnOrder);
     if (!winnerId) return false;
+    ek.winnerId = winnerId;
     room.boardWinnerId = winnerId;
     const winner = room.players.find((p) => p.id === winnerId);
-    log(room, `${winner?.name ?? "Someone"} wins Detonation Cats!`);
+    log(room, `${winner?.name ?? "Someone"} wins Exploding Kittens!`);
     this.setPhase(room, "gameover", null);
     this.emitRoom(room);
     return true;
   }
 
-  private dcFinishTurnDraw(room: Room, playerId: string) {
-    const dc = room.detonationCats;
-    if (!dc) return;
-    const actor = room.players.find((p) => p.id === playerId);
-    if (!actor?.alive) return;
-
-    if (dc.skipDraw) {
-      dc.skipDraw = false;
-      advanceTurn(
-        dc,
-        room.players.map((p) => ({ id: p.id, name: p.name, alive: p.alive })),
-        playerId
-      );
-      if (this.dcMaybeWinRoom(room)) return;
-      this.setPhase(room, "ek_turn", room.settings.daySeconds);
-      this.scheduleBots(room);
-      this.emitRoom(room);
-      return;
-    }
-
-    const result = resolveDraw(
-      dc,
-      actor,
-      room.players.map((p) => ({ id: p.id, name: p.name, alive: p.alive }))
-    );
-    room.logs.push(newLog(result.logs.join(" ")));
-
-    if (result.needsDefuse) {
-      this.setPhase(room, "ek_defuse", room.settings.daySeconds);
-      this.scheduleBots(room);
-      this.emitRoom(room);
-      return;
-    }
-
-    if (result.eliminated) {
-      if (this.dcMaybeWinRoom(room)) return;
-    }
-
-    advanceTurn(
-      dc,
-      room.players.map((p) => ({ id: p.id, name: p.name, alive: p.alive })),
-      playerId
-    );
-    if (this.dcMaybeWinRoom(room)) return;
-    this.setPhase(room, "ek_turn", room.settings.daySeconds);
-    this.scheduleBots(room);
-    this.emitRoom(room);
-  }
-
   submitEkPlayCards(roomId: string, playerId: string, cardIds: string[]) {
     const room = this.getRoom(roomId);
-    if (!room || room.paused || room.gameId !== "detonation-cats") return;
+    if (!room || room.paused || !this.isEkGame(room.gameId)) return;
     if (room.phase !== "ek_turn") return;
-    const dc = room.detonationCats;
-    if (!dc || dc.turnPlayerId !== playerId) return;
+    const ek = room.explodingKittens;
+    if (!ek || ek.turnPlayerId !== playerId || ek.subPhase !== "play") return;
+    if (ek.nopeWindowEndsAt) return;
     const actor = room.players.find((p) => p.id === playerId);
     if (!actor?.alive) return;
 
-    const hand = dc.handsByPlayerId[playerId] ?? [];
+    const hand = ek.handsByPlayerId[playerId] ?? [];
     const validated = validatePlayCards(hand, cardIds);
     if (!validated.ok) return;
 
     const { taken, remaining } = takeCardsFromHand(hand, cardIds);
-    dc.handsByPlayerId[playerId] = remaining;
+    ek.handsByPlayerId[playerId] = remaining;
 
-    const result = resolvePlayedCards(
-      dc,
-      { id: actor.id, name: actor.name, alive: actor.alive },
-      taken,
-      room.players.map((p) => ({ id: p.id, name: p.name, alive: p.alive }))
-    );
-    for (const line of result.logs) {
-      room.logs.push(newLog(line));
+    const result = ekPlayCards(ek, this.ekPlayerRefs(room), playerId, taken);
+    if (this.applyEkResult(room, result)) return;
+    if (ek.nopeWindowEndsAt) {
+      this.scheduleEkNopeResolve(room);
     }
-
-    if (result.nextPhase === "ek_steal") {
-      this.setPhase(room, "ek_steal", room.settings.daySeconds);
-      this.scheduleBots(room);
-      this.emitRoom(room);
-      return;
-    }
-    if (result.nextPhase === "ek_pick_discard") {
-      this.setPhase(room, "ek_pick_discard", room.settings.daySeconds);
-      this.scheduleBots(room);
-      this.emitRoom(room);
-      return;
-    }
-    if (result.endTurnWithoutDraw) {
-      if (!result.turnAlreadyAdvanced) {
-        advanceTurn(
-          dc,
-          room.players.map((p) => ({ id: p.id, name: p.name, alive: p.alive })),
-          playerId
-        );
-      }
-      if (this.dcMaybeWinRoom(room)) return;
-      this.setPhase(room, "ek_turn", room.settings.daySeconds);
-      this.scheduleBots(room);
-      this.emitRoom(room);
-      return;
-    }
-
-    this.scheduleBots(room);
-    this.emitRoom(room);
   }
 
   submitEkEndTurn(roomId: string, playerId: string) {
     const room = this.getRoom(roomId);
-    if (!room || room.paused || room.gameId !== "detonation-cats") return;
+    if (!room || room.paused || !this.isEkGame(room.gameId)) return;
     if (room.phase !== "ek_turn") return;
-    const dc = room.detonationCats;
-    if (!dc || dc.turnPlayerId !== playerId) return;
-    this.dcFinishTurnDraw(room, playerId);
+    const ek = room.explodingKittens;
+    if (!ek || ek.turnPlayerId !== playerId) return;
+    if (ek.nopeWindowEndsAt) return;
+
+    if (ek.subPhase === "draw") {
+      this.submitEkDraw(roomId, playerId);
+      return;
+    }
+    ekBeginDrawPhase(ek, playerId);
+    this.emitRoom(room);
+    this.scheduleBots(room);
+  }
+
+  submitEkDraw(roomId: string, playerId: string) {
+    const room = this.getRoom(roomId);
+    if (!room || room.paused || !this.isEkGame(room.gameId)) return;
+    if (room.phase !== "ek_turn") return;
+    const ek = room.explodingKittens;
+    if (!ek || ek.turnPlayerId !== playerId || ek.subPhase !== "draw") return;
+    if (ek.nopeWindowEndsAt) return;
+
+    const result = ekDraw(ek, this.ekPlayerRefs(room), playerId);
+    if (this.applyEkResult(room, result)) return;
+    if (!result.gameOver) {
+      this.ekMaybeWinRoom(room);
+    }
+  }
+
+  submitEkNope(roomId: string, playerId: string, cardId: string) {
+    const room = this.getRoom(roomId);
+    if (!room || room.paused || !this.isEkGame(room.gameId)) return;
+    const ek = room.explodingKittens;
+    if (!ek?.nopeWindowEndsAt) return;
+
+    const result = ekPlayNope(ek, playerId, cardId);
+    if (!result) return;
+    for (const line of result.logs) {
+      room.logs.push(newEkLog(line));
+    }
+    this.scheduleEkNopeResolve(room);
+    this.emitRoom(room);
   }
 
   submitEkPlaceDefuse(roomId: string, playerId: string, deckIndex: number) {
     const room = this.getRoom(roomId);
-    if (!room || room.paused || room.gameId !== "detonation-cats") return;
+    if (!room || room.paused || !this.isEkGame(room.gameId)) return;
     if (room.phase !== "ek_defuse") return;
-    const dc = room.detonationCats;
-    if (!dc || dc.defusePlayerId !== playerId) return;
+    const ek = room.explodingKittens;
+    if (!ek || ek.defusePlayerId !== playerId) return;
 
-    insertDefuse(dc, dc.pendingDefuseCard ?? { id: randomUUID(), type: "defuse" }, deckIndex);
-    dc.defusePlayerId = null;
-    dc.pendingDefuseCard = null;
-    log(room, `${room.players.find((p) => p.id === playerId)?.name ?? "Player"} hides a Purr Defuse in the deck.`);
-
-    advanceTurn(
-      dc,
-      room.players.map((p) => ({ id: p.id, name: p.name, alive: p.alive })),
-      playerId
-    );
-    if (this.dcMaybeWinRoom(room)) return;
-    this.setPhase(room, "ek_turn", room.settings.daySeconds);
-    this.scheduleBots(room);
-    this.emitRoom(room);
+    const result = ekPlaceDefuse(ek, this.ekPlayerRefs(room), playerId, deckIndex);
+    if (this.applyEkResult(room, result)) return;
+    this.ekMaybeWinRoom(room);
   }
 
   submitEkPickDiscard(
@@ -1676,71 +2432,163 @@ export class GameRuntime {
     discardIndex: number
   ) {
     const room = this.getRoom(roomId);
-    if (!room || room.paused || room.gameId !== "detonation-cats") return;
+    if (!room || room.paused || !this.isEkGame(room.gameId)) return;
     if (room.phase !== "ek_pick_discard") return;
-    const dc = room.detonationCats;
-    if (!dc || dc.pickDiscardPlayerId !== playerId) return;
-    if (dc.discardPile.length === 0) return;
+    const ek = room.explodingKittens;
+    if (!ek || ek.pickDiscardPlayerId !== playerId) return;
 
-    const picked = pickFromDiscard(dc, playerId, discardIndex);
-    if (picked) {
-      log(room, `${room.players.find((p) => p.id === playerId)?.name ?? "Player"} takes ${picked.type} from discard.`);
-    }
-
-    this.setPhase(room, "ek_turn", room.settings.daySeconds);
-    this.scheduleBots(room);
-    this.emitRoom(room);
+    const result = ekPickDiscard(ek, this.ekPlayerRefs(room), playerId, discardIndex);
+    this.applyEkResult(room, result);
   }
 
   submitEkStealTarget(roomId: string, playerId: string, targetId: string) {
     const room = this.getRoom(roomId);
-    if (!room || room.paused || room.gameId !== "detonation-cats") return;
+    if (!room || room.paused || !this.isEkGame(room.gameId)) return;
     if (room.phase !== "ek_steal") return;
-    const dc = room.detonationCats;
-    if (!dc || dc.stealActorId !== playerId) return;
+    const ek = room.explodingKittens;
+    if (!ek || ek.stealActorId !== playerId) return;
+    const target = room.players.find((p) => p.id === targetId && p.alive);
+    if (!target || target.id === playerId) return;
+    const targetHand = ek.handsByPlayerId[targetId] ?? [];
+    if (targetHand.length === 0) return;
+
+    const result = ekStealTarget(ek, this.ekPlayerRefs(room), playerId, targetId);
+    this.applyEkResult(room, result);
+  }
+
+  submitEkFavorTarget(roomId: string, playerId: string, targetId: string) {
+    const room = this.getRoom(roomId);
+    if (!room || room.paused || !this.isEkGame(room.gameId)) return;
+    if (room.phase !== "ek_favor") return;
+    const ek = room.explodingKittens;
+    if (!ek || ek.favorFromId !== playerId) return;
     const target = room.players.find((p) => p.id === targetId && p.alive);
     if (!target || target.id === playerId) return;
 
-    const label = stealRandomCard(dc, target.id, playerId);
-    if (label) {
-      log(room, `${room.players.find((p) => p.id === playerId)?.name ?? "Player"} steals ${label} from ${target.name}.`);
-    }
-
-    this.setPhase(room, "ek_turn", room.settings.daySeconds);
-    this.scheduleBots(room);
-    this.emitRoom(room);
+    const result = ekFavorTarget(ek, playerId, targetId);
+    this.applyEkResult(room, result);
   }
 
-  private onTimeoutDetonationCats(roomId: string) {
+  submitEkFavorGive(roomId: string, playerId: string, cardId: string) {
     const room = this.getRoom(roomId);
-    if (!room || room.paused || room.gameId !== "detonation-cats") return;
-    const dc = room.detonationCats;
-    if (!dc) return;
+    if (!room || room.paused || !this.isEkGame(room.gameId)) return;
+    if (room.phase !== "ek_favor") return;
+    const ek = room.explodingKittens;
+    if (!ek || ek.favorToId !== playerId) return;
 
-    if (room.phase === "ek_turn" && dc.turnPlayerId) {
-      log(room, `${room.players.find((p) => p.id === dc.turnPlayerId)?.name ?? "Player"} timed out — auto draw.`);
-      this.dcFinishTurnDraw(room, dc.turnPlayerId);
+    const result = ekFavorGive(ek, this.ekPlayerRefs(room), playerId, cardId);
+    this.applyEkResult(room, result);
+  }
+
+  submitEkTripleDeclare(
+    roomId: string,
+    playerId: string,
+    targetId: string,
+    cardType: import("@/lib/games/exploding-kittens/cards").EkCardType
+  ) {
+    const room = this.getRoom(roomId);
+    if (!room || room.paused || !this.isEkGame(room.gameId)) return;
+    if (room.phase !== "ek_triple") return;
+    const ek = room.explodingKittens;
+    if (!ek || ek.tripleActorId !== playerId) return;
+    const target = room.players.find((p) => p.id === targetId && p.alive);
+    if (!target || target.id === playerId) return;
+
+    const result = ekTripleDeclare(
+      ek,
+      this.ekPlayerRefs(room),
+      playerId,
+      targetId,
+      cardType
+    );
+    this.applyEkResult(room, result);
+  }
+
+  private onTimeoutExplodingKittens(roomId: string) {
+    const room = this.getRoom(roomId);
+    if (!room || room.paused || !this.isEkGame(room.gameId)) return;
+    const ek = room.explodingKittens;
+    if (!ek) return;
+
+    if (ek.nopeWindowEndsAt && Date.now() >= ek.nopeWindowEndsAt) {
+      const result = ekResolveNopeWindow(ek, this.ekPlayerRefs(room));
+      if (this.applyEkResult(room, result)) return;
+    }
+
+    if (room.phase === "ek_turn" && ek.turnPlayerId) {
+      if (ek.nopeWindowEndsAt) return;
+      if (ek.subPhase === "draw") {
+        log(
+          room,
+          `${room.players.find((p) => p.id === ek.turnPlayerId)?.name ?? "Player"} timed out — auto draw.`
+        );
+        this.submitEkDraw(roomId, ek.turnPlayerId);
+        return;
+      }
+      this.submitEkEndTurn(roomId, ek.turnPlayerId);
       return;
     }
-    if (room.phase === "ek_defuse" && dc.defusePlayerId) {
-      this.submitEkPlaceDefuse(roomId, dc.defusePlayerId, pickBotDefusePosition(dc.drawDeck.length));
+    if (room.phase === "ek_defuse" && ek.defusePlayerId) {
+      this.submitEkPlaceDefuse(
+        roomId,
+        ek.defusePlayerId,
+        ekRandomDefuseIndex(ek.drawDeck.length)
+      );
       return;
     }
-    if (room.phase === "ek_pick_discard" && dc.pickDiscardPlayerId) {
+    if (room.phase === "ek_pick_discard" && ek.pickDiscardPlayerId) {
       this.submitEkPickDiscard(
         roomId,
-        dc.pickDiscardPlayerId,
-        pickBotDiscardIndex(dc.discardPile.length)
+        ek.pickDiscardPlayerId,
+        pickBotDiscardIndex(ek.discardPile.length)
       );
       return;
     }
-    if (room.phase === "ek_steal" && dc.stealActorId) {
+    if (room.phase === "ek_steal" && ek.stealActorId) {
+      const counts: Record<string, number> = {};
+      for (const [pid, hand] of Object.entries(ek.handsByPlayerId)) {
+        counts[pid] = hand.length;
+      }
       const target = pickBotStealTarget(
         room.players.filter((p) => p.alive).map((p) => p.id),
-        dc.stealActorId
+        ek.stealActorId,
+        counts
       );
       if (target) {
-        this.submitEkStealTarget(roomId, dc.stealActorId, target);
+        this.submitEkStealTarget(roomId, ek.stealActorId, target);
+      }
+      return;
+    }
+    if (room.phase === "ek_favor" && ek.favorToId) {
+      const hand = ek.handsByPlayerId[ek.favorToId] ?? [];
+      const cardId = pickBotFavorCard(hand);
+      if (cardId) {
+        this.submitEkFavorGive(roomId, ek.favorToId, cardId);
+      }
+      return;
+    }
+    if (room.phase === "ek_favor" && ek.favorFromId && ek.pendingAction?.kind === "favor_pick_target") {
+      const others = room.players.filter(
+        (p) => p.alive && p.id !== ek.favorFromId
+      );
+      const target = others[0];
+      if (target) {
+        this.submitEkFavorTarget(roomId, ek.favorFromId, target.id);
+      }
+      return;
+    }
+    if (room.phase === "ek_triple" && ek.tripleActorId) {
+      const others = room.players.filter(
+        (p) => p.alive && p.id !== ek.tripleActorId
+      );
+      const target = others[0];
+      if (target) {
+        this.submitEkTripleDeclare(
+          roomId,
+          ek.tripleActorId,
+          target.id,
+          pickBotTripleType(ek.handsByPlayerId[ek.tripleActorId] ?? []) ?? "skip"
+        );
       }
     }
   }
@@ -2280,8 +3128,8 @@ export class GameRuntime {
       this.onTimeoutFiveAlive(roomId);
       return;
     }
-    if (room.gameId === "detonation-cats") {
-      this.onTimeoutDetonationCats(roomId);
+    if (this.isEkGame(room.gameId)) {
+      this.onTimeoutExplodingKittens(roomId);
       return;
     }
     if (room.gameId === "tic-tac-toe" && room.phase === "ttt_play" && room.ttt) {
@@ -2297,6 +3145,10 @@ export class GameRuntime {
       const turnId = room.connect4.turnPlayerId;
       const col = pickBotC4Column(room.connect4.board);
       if (col != null) this.submitConnect4Drop(room.id, turnId, col);
+      return;
+    }
+    if (room.gameId === "battleship") {
+      this.onTimeoutBattleship(roomId);
       return;
     }
     if (room.phase === "reveal") {
@@ -2336,6 +3188,196 @@ export class GameRuntime {
     return true;
   }
 
+  private fiveAliveSeats(room: Room): FiveAliveSeat[] {
+    return room.players.map((p) => ({
+      id: p.id,
+      name: p.name,
+      alive: p.alive,
+      lives: p.lives ?? 0,
+    }));
+  }
+
+  private fiveAliveLivingPlayerIds(room: Room): string[] {
+    return room.players
+      .filter((p) => p.alive && (p.lives ?? 0) > 0)
+      .map((p) => p.id);
+  }
+
+  private fiveAliveClearDealTimer(five: NonNullable<Room["fiveAlive"]>) {
+    if (five.dealTimer) {
+      clearTimeout(five.dealTimer);
+      five.dealTimer = null;
+    }
+  }
+
+  private fiveAliveCollectAllCardsToDeck(
+    five: NonNullable<Room["fiveAlive"]>
+  ) {
+    const pool: FiveAliveCardInstance[] = [];
+    for (const hand of Object.values(five.handsByPlayerId)) {
+      pool.push(...hand);
+    }
+    pool.push(...five.centerPile, ...five.discardPile);
+    five.centerPile = [];
+    five.discardPile = [];
+    five.handsByPlayerId = {};
+    five.drawDeck = shuffle([...five.drawDeck, ...pool]);
+  }
+
+  private fiveAliveDealToAllLiving(room: Room) {
+    const five = room.fiveAlive;
+    if (!five) return;
+    for (const playerId of this.fiveAliveLivingPlayerIds(room)) {
+      five.handsByPlayerId[playerId] = [];
+      drawIntoHand(five, playerId, FIVE_ALIVE_HAND_SIZE, buildFiveAliveDeck);
+    }
+  }
+
+  private beginFiveAliveDealing(
+    room: Room,
+    kind: FiveAliveDealKind,
+    banner: string | null,
+    pendingTurnPlayerId: string | null,
+    explicitSteps?: import("@/lib/games/5-alive/dealing").FiveAliveDealStep[]
+  ) {
+    const five = room.fiveAlive;
+    if (!five) return;
+
+    this.fiveAliveClearDealTimer(five);
+
+    const playerIds = this.fiveAliveLivingPlayerIds(room);
+    five.dealSeq += 1;
+    five.dealKind = kind;
+    five.dealBanner = banner;
+    five.dealSteps =
+      explicitSteps ?? buildDealStepsFromHands(playerIds, five.handsByPlayerId);
+    five.pendingTurnAfterDeal = pendingTurnPlayerId;
+
+    this.setPhase(room, "fivealive_dealing", null);
+    this.clearBotTimers(room);
+    this.emitRoom(room);
+
+    const showBanner = !!banner;
+    const duration = dealAnimationDurationMs(five.dealSteps.length, showBanner);
+    five.dealTimer = setTimeout(
+      () => this.completeFiveAliveDealing(room.id),
+      duration
+    );
+  }
+
+  private completeFiveAliveDealing(roomId: string) {
+    const room = this.getRoom(roomId);
+    const five = room?.fiveAlive;
+    if (!room || !five || room.phase !== "fivealive_dealing") return;
+
+    this.fiveAliveClearDealTimer(five);
+
+    if (five.pendingTurnAfterDeal) {
+      five.turnPlayerId = five.pendingTurnAfterDeal;
+    }
+    five.pendingTurnAfterDeal = null;
+    five.dealKind = null;
+    five.dealBanner = null;
+    five.dealSteps = [];
+
+    this.setPhase(room, "fivealive_turn", room.settings.daySeconds);
+    if (!this.fiveAliveAutoPassIfStuck(room)) {
+      this.scheduleBots(room);
+    }
+    this.emitRoom(room);
+  }
+
+  private fiveAliveResolveTurnAfter(
+    room: Room,
+    fromPlayerId: string
+  ): string | null {
+    const five = room.fiveAlive;
+    if (!five) return null;
+
+    if (five.repeatTurnForPlayerId) {
+      return five.repeatTurnForPlayerId;
+    }
+
+    const nextId = this.fiveAliveNextNormalPlayerId(room, fromPlayerId);
+    if (!nextId) return null;
+
+    if (five.pendingDrawCount > 0) {
+      this.fiveAliveDrawIntoHand(room, nextId, five.pendingDrawCount);
+      log(
+        room,
+        `${room.players.find((p) => p.id === nextId)?.name ?? "Someone"} draws ${five.pendingDrawCount}.`
+      );
+      five.pendingDrawCount = 0;
+      return this.fiveAliveNextNormalPlayerId(room, nextId);
+    }
+
+    return nextId;
+  }
+
+  private fiveAlivePenalizeEmptyHand(room: Room, playerId: string) {
+    const five = room.fiveAlive;
+    if (!five) return;
+    const hand = five.handsByPlayerId[playerId] ?? [];
+    if (hand.length > 0) return;
+
+    const actor = room.players.find((p) => p.id === playerId);
+    const seats = this.fiveAliveSeats(room);
+
+    if (actor && shouldPenalizeOnEmptyHand(seats, playerId)) {
+      let penalized = 0;
+      for (const p of room.players) {
+        if (p.id === playerId) continue;
+        if (!p.alive || (p.lives ?? 0) <= 0) continue;
+        p.lives = Math.max(0, (p.lives ?? 0) - 1);
+        p.alive = (p.lives ?? 0) > 0;
+        penalized += 1;
+      }
+      if (penalized > 0) {
+        log(
+          room,
+          `${actor.name} emptied their hand — all other players lose 1 life.`
+        );
+      }
+    }
+  }
+
+  private fiveAliveResetRound(
+    room: Room,
+    banner: string,
+    fromPlayerId: string,
+    /** When true, `fromPlayerId` starts the next deal (round winner). */
+    startWithFromPlayer = false
+  ) {
+    const five = room.fiveAlive;
+    if (!five) return;
+
+    five.runningTotal = 0;
+    five.pendingDrawCount = 0;
+    five.skipNext = false;
+    five.repeatTurnForPlayerId = null;
+    five.bombAwaitingPlayerId = null;
+    five.bombActorId = null;
+    five.bombResponderIds = [];
+
+    this.fiveAliveCollectAllCardsToDeck(five);
+    this.fiveAliveDealToAllLiving(room);
+
+    const fromStillAlive = this.fiveAliveLivingPlayerIds(room).includes(
+      fromPlayerId
+    );
+    const nextTurn =
+      startWithFromPlayer && fromStillAlive
+        ? fromPlayerId
+        : this.fiveAliveResolveTurnAfter(room, fromPlayerId);
+    if (!nextTurn) {
+      this.fiveAliveMaybeWin(room);
+      return;
+    }
+
+    five.repeatTurnForPlayerId = null;
+    this.beginFiveAliveDealing(room, "round_reset", banner, nextTurn);
+  }
+
   private fiveAliveDrawIntoHand(
     room: Room,
     playerId: string,
@@ -2343,46 +3385,34 @@ export class GameRuntime {
   ) {
     const five = room.fiveAlive;
     if (!five || count <= 0) return;
-    if (!five.handsByPlayerId[playerId]) five.handsByPlayerId[playerId] = [];
-
-    const drawOne = (): FiveAliveCardInstance => {
-      if (five.drawDeck.length === 0) {
-        if (five.discardPile.length === 0) {
-          // Safety fallback; the deck should be large enough in practice.
-          five.drawDeck = buildFiveAliveDeck();
-        } else {
-          five.drawDeck = shuffle(five.discardPile);
-          five.discardPile = [];
-        }
-      }
-      const drawn = five.drawDeck.pop();
-      if (!drawn) {
-        five.drawDeck = buildFiveAliveDeck();
-        return five.drawDeck.pop() as FiveAliveCardInstance;
-      }
-      return drawn;
-    };
-
-    for (let i = 0; i < count; i++) {
-      five.handsByPlayerId[playerId].push(drawOne());
-    }
+    drawIntoHand(five, playerId, count, buildFiveAliveDeck);
   }
 
-  private fiveAliveRedealIfEmpty(room: Room, playerId: string) {
+  private fiveAliveAfterEmptyHandRoundEnd(
+    room: Room,
+    playerId: string
+  ): boolean {
     const five = room.fiveAlive;
-    if (!five) return;
+    if (!five) return false;
     const hand = five.handsByPlayerId[playerId] ?? [];
-    if (hand.length > 0) return;
-    five.handsByPlayerId[playerId] = [];
-    this.fiveAliveDrawIntoHand(room, playerId, FIVE_ALIVE_HAND_SIZE);
+    if (hand.length > 0) return false;
+
+    this.fiveAlivePenalizeEmptyHand(room, playerId);
+    if (this.fiveAliveMaybeWin(room)) return true;
+    // Round winner (emptied hand) starts the next deal.
+    this.fiveAliveResetRound(
+      room,
+      "Round complete — new hands dealt.",
+      playerId,
+      true
+    );
+    return true;
   }
 
   private fiveAliveClearCenterToDiscard(room: Room) {
     const five = room.fiveAlive;
     if (!five) return;
-    if (five.centerPile.length === 0) return;
-    five.discardPile.push(...five.centerPile);
-    five.centerPile = [];
+    clearCenterToDiscard(five);
   }
 
   private fiveAliveNextNormalPlayerId(
@@ -2391,30 +3421,34 @@ export class GameRuntime {
   ): string | null {
     const five = room.fiveAlive;
     if (!five) return null;
-    const dir = five.direction;
-    const n = room.players.length;
-    const fromIdx = room.players.findIndex((p) => p.id === fromPlayerId);
-    if (fromIdx < 0) return null;
-
     const steps = 1 + (five.skipNext ? 1 : 0);
-    let remaining = steps;
-    let idx = fromIdx;
-    while (remaining > 0) {
-      idx = (idx + dir + n) % n;
-      const candidate = room.players[idx];
-      if ((candidate.lives ?? 0) > 0 && candidate.alive) {
-        remaining -= 1;
-      }
-      // Safety: if somehow nobody else is living, return null.
-      if (remaining > 0 && idx === fromIdx) return null;
-    }
     five.skipNext = false;
-    return room.players[idx]?.id ?? null;
+    return nextLivingSeatId(
+      this.fiveAliveSeats(room),
+      fromPlayerId,
+      five.direction,
+      steps
+    );
   }
 
   private fiveAliveAdvanceToNextTurn(room: Room, fromPlayerId: string) {
     const five = room.fiveAlive;
     if (!five) return;
+
+    if (five.repeatTurnForPlayerId) {
+      const repeatId = five.repeatTurnForPlayerId;
+      five.repeatTurnForPlayerId = null;
+      five.turnPlayerId = repeatId;
+      five.bombAwaitingPlayerId = null;
+      five.bombResponderIds = [];
+      five.bombActorId = null;
+      this.setPhase(room, "fivealive_turn", room.settings.daySeconds);
+      if (!this.fiveAliveAutoPassIfStuck(room)) {
+        this.scheduleBots(room);
+        this.emitRoom(room);
+      }
+      return;
+    }
 
     const nextId = this.fiveAliveNextNormalPlayerId(room, fromPlayerId);
     if (!nextId) {
@@ -2422,59 +3456,101 @@ export class GameRuntime {
       return;
     }
 
-    // Apply pending draw to the next player before their turn begins.
+    let turnPlayerId = nextId;
+
+    // +1/+2: next player draws, then turn skips them to the following player.
     if (five.pendingDrawCount > 0) {
       this.fiveAliveDrawIntoHand(room, nextId, five.pendingDrawCount);
-      log(room, `${room.players.find((p) => p.id === nextId)?.name ?? "Someone"} draws ${five.pendingDrawCount}.`);
+      log(
+        room,
+        `${room.players.find((p) => p.id === nextId)?.name ?? "Someone"} draws ${five.pendingDrawCount}.`
+      );
       five.pendingDrawCount = 0;
+      const afterDrawerId = this.fiveAliveNextNormalPlayerId(room, nextId);
+      if (!afterDrawerId) {
+        this.fiveAliveMaybeWin(room);
+        return;
+      }
+      turnPlayerId = afterDrawerId;
     }
 
-    five.turnPlayerId = nextId;
+    five.turnPlayerId = turnPlayerId;
     five.bombAwaitingPlayerId = null;
     five.bombResponderIds = [];
     five.bombActorId = null;
     this.setPhase(room, "fivealive_turn", room.settings.daySeconds);
-    this.scheduleBots(room);
-    this.emitRoom(room);
+    if (!this.fiveAliveAutoPassIfStuck(room)) {
+      this.scheduleBots(room);
+      this.emitRoom(room);
+    }
+  }
+
+  /** No legal play → lose 1 life and reset total (runs automatically). */
+  private fiveAliveAutoPassIfStuck(room: Room): boolean {
+    const five = room.fiveAlive;
+    if (!five || room.phase !== "fivealive_turn" || !five.turnPlayerId) {
+      return false;
+    }
+    const playerId = five.turnPlayerId;
+    const hand = five.handsByPlayerId[playerId] ?? [];
+    if (hand.length === 0 || handHasPlayableCard(hand, five.runningTotal)) {
+      return false;
+    }
+    this.submitFiveAlivePlayCard(room.id, playerId, null, undefined, true);
+    return true;
   }
 
   private fiveAliveStartBombResolution(room: Room, actorId: string) {
     const five = room.fiveAlive;
     if (!five) return;
-    const living = room.players.filter((p) => (p.lives ?? 0) > 0 && p.alive);
-    if (living.length <= 1) return;
+    if (livingCount(this.fiveAliveSeats(room)) <= 1) {
+      this.fiveAliveAdvanceToNextTurn(room, actorId);
+      return;
+    }
 
-    // Start responders from the next normal player after the bomb actor, in
-    // the current turn direction, then walk the table until all other living
-    // players have responded.
-    const n = room.players.length;
-    const actorIdx = room.players.findIndex((p) => p.id === actorId);
-    const dir = five.direction;
+    const responders = bombResponderIds(
+      this.fiveAliveSeats(room),
+      actorId,
+      five.direction
+    );
 
-    const responders: string[] = [];
-    let idx = actorIdx;
-    while (responders.length < living.length - 1) {
-      idx = (idx + dir + n) % n;
-      const candidate = room.players[idx];
-      if ((candidate.lives ?? 0) > 0 && candidate.alive && candidate.id !== actorId) {
-        responders.push(candidate.id);
-      }
-      // Safety break to avoid infinite loops.
-      if (idx === actorIdx && responders.length === living.length - 1) break;
-      if (idx === actorIdx && responders.length < living.length - 1) break;
+    if (responders.length === 0) {
+      this.fiveAliveAdvanceToNextTurn(room, actorId);
+      return;
     }
 
     five.bombActorId = actorId;
     five.bombResponderIds = responders;
     five.bombAwaitingPlayerId = responders[0] ?? null;
     five.turnPlayerId = null;
+    five.runningTotal = 0;
     five.skipNext = false;
-    // Bomb does not specify carrying forward pending draw/skip.
     five.pendingDrawCount = 0;
+    five.repeatTurnForPlayerId = null;
+
+    this.fiveAliveClearDealTimer(five);
+    five.dealKind = null;
+    five.dealBanner = null;
+    five.dealSteps = [];
+    five.pendingTurnAfterDeal = null;
 
     this.setPhase(room, "fivealive_bomb", room.settings.daySeconds);
     this.scheduleBots(room);
     this.emitRoom(room);
+  }
+
+  /** Auto-play number 0 if held; otherwise lose 1 life. */
+  private fiveAliveAutoResolveBombResponse(room: Room, playerId: string) {
+    const five = room.fiveAlive;
+    if (!five || room.phase !== "fivealive_bomb") return;
+    if (five.bombAwaitingPlayerId !== playerId) return;
+    const hand = five.handsByPlayerId[playerId] ?? [];
+    const zero = hand.find((c) => isNumber0(c));
+    if (zero) {
+      this.submitFiveAlivePlayCard(room.id, playerId, zero.id);
+    } else {
+      this.submitFiveAlivePlayCard(room.id, playerId, null, undefined, true);
+    }
   }
 
   private onTimeoutFiveAlive(roomId: string) {
@@ -2485,46 +3561,35 @@ export class GameRuntime {
 
     if (room.phase === "fivealive_turn") {
       const actorId = five.turnPlayerId;
-      const actorName =
-        room.players.find((p) => p.id === actorId)?.name ?? "Someone";
-      log(room, `${actorName} timed out. Turn skipped.`);
-      // Skip to next normal turn.
-      if (actorId) {
-        this.fiveAliveAdvanceToNextTurn(room, actorId);
-      } else {
+      if (!actorId) {
         this.fiveAliveMaybeWin(room);
+        return;
+      }
+      const actor = room.players.find((p) => p.id === actorId);
+      const actorName = actor?.name ?? "Someone";
+      const hand = five.handsByPlayerId[actorId] ?? [];
+      const play = pickBotFiveAliveTurnPlay(hand, five.runningTotal);
+
+      if (!play) {
+        log(room, `${actorName} timed out with no playable card.`);
+        this.fiveAliveAdvanceToNextTurn(room, actorId);
+        return;
+      }
+
+      log(room, `${actorName} timed out — auto-playing.`);
+      if (play.pass) {
+        this.submitFiveAlivePlayCard(room.id, actorId, null, undefined, true);
+      } else {
+        this.submitFiveAlivePlayCard(room.id, actorId, play.cardId);
       }
       return;
     }
 
     if (room.phase === "fivealive_bomb") {
       const awaitingId = five.bombAwaitingPlayerId;
-      if (awaitingId) {
-        const p = room.players.find((x) => x.id === awaitingId);
-        if (p && p.alive) {
-          p.lives = Math.max(0, (p.lives ?? 0) - 1);
-          p.alive = (p.lives ?? 0) > 0;
-          this.fiveAliveRedealIfEmpty(room, p.id);
-        }
-      }
-
-      // Advance bomb awaiting to next responder (or finish).
-      const idx = five.bombResponderIds.indexOf(awaitingId ?? "");
-      const nextAwaiting = five.bombResponderIds[idx + 1] ?? null;
-      five.bombAwaitingPlayerId = nextAwaiting;
-      if (!nextAwaiting) {
-        const actorId = five.bombActorId;
-        five.bombActorId = null;
-        five.bombResponderIds = [];
-        five.bombAwaitingPlayerId = null;
-        if (actorId) {
-          this.fiveAliveAdvanceToNextTurn(room, actorId);
-        } else {
-          this.fiveAliveMaybeWin(room);
-        }
-      }
-      void this.fiveAliveMaybeWin(room);
-      this.emitRoom(room);
+      if (!awaitingId) return;
+      log(room, `Bomb response timed out — auto-resolving.`);
+      this.fiveAliveAutoResolveBombResponse(room, awaitingId);
     }
   }
 
@@ -2544,9 +3609,31 @@ export class GameRuntime {
     if (!actor || !actor.alive || (actor.lives ?? 0) <= 0) return;
     if (!five.handsByPlayerId[playerId]) five.handsByPlayerId[playerId] = [];
 
+    if (room.phase === "fivealive_dealing") return;
+
     if (room.phase === "fivealive_turn") {
       if (five.turnPlayerId !== playerId) return;
-      if (pass) return; // no “pass” on a normal turn by spec
+
+      if (pass) {
+        const hand = five.handsByPlayerId[playerId] ?? [];
+        if (handHasPlayableCard(hand, five.runningTotal)) return;
+        actor.lives = Math.max(0, (actor.lives ?? 0) - 1);
+        actor.alive = (actor.lives ?? 0) > 0;
+        five.runningTotal = 0;
+        five.pendingDrawCount = 0;
+        five.skipNext = false;
+        five.repeatTurnForPlayerId = null;
+        this.fiveAliveClearCenterToDiscard(room);
+        log(
+          room,
+          `${actor.name} has no playable cards — lose 1 life, reset to 0.`
+        );
+        this.fiveAliveAnnounce(room, fiveAlivePassAnnouncement(actor.name));
+        if (this.fiveAliveMaybeWin(room)) return;
+        // Keep all hands; only the stuck player lost a life and total reset.
+        this.fiveAliveAdvanceToNextTurn(room, playerId);
+        return;
+      }
 
       const id = cardId ?? null;
       if (!id) return;
@@ -2556,15 +3643,12 @@ export class GameRuntime {
       if (idx < 0) return;
 
       const card = hand[idx] as FiveAliveCardInstance;
+      if (!canPlayFiveAliveCardAtTotal(card, five.runningTotal)) {
+        return;
+      }
+
       hand.splice(idx, 1);
       five.centerPile.push(card);
-
-      const advanceAfterPlay = () => {
-        // Re-deal before advancing so the next player sees updated hands.
-        this.fiveAliveRedealIfEmpty(room, playerId);
-        if (this.fiveAliveMaybeWin(room)) return;
-        this.fiveAliveAdvanceToNextTurn(room, playerId);
-      };
 
       const doBust = (reason: string) => {
         actor.lives = Math.max(0, (actor.lives ?? 0) - 1);
@@ -2572,104 +3656,115 @@ export class GameRuntime {
         five.runningTotal = 0;
         five.pendingDrawCount = 0;
         five.skipNext = false;
+        five.repeatTurnForPlayerId = null;
         this.fiveAliveClearCenterToDiscard(room);
         log(room, `${actor.name} busts (${reason}) — lose 1 life, reset to 0.`);
-        this.fiveAliveRedealIfEmpty(room, playerId);
         if (this.fiveAliveMaybeWin(room)) return;
-        this.fiveAliveAdvanceToNextTurn(room, playerId);
+        this.fiveAliveResetRound(
+          room,
+          "Round complete — new hands dealt.",
+          playerId
+        );
       };
 
-      switch (card.type) {
-        case "number": {
-          const tentative = five.runningTotal + card.value;
-          if (tentative > 21) {
-            doBust(`>${21}`);
-            return;
-          }
-          five.runningTotal = tentative;
-          log(room, `${actor.name} plays ${cardLabel(card)} (total: ${five.runningTotal}).`);
-          advanceAfterPlay();
-          return;
-        }
-        case "eq21":
-          five.runningTotal = 21;
-          log(room, `${actor.name} plays =21 (total: 21).`);
-          advanceAfterPlay();
-          return;
-        case "reset0":
-          five.runningTotal = 0;
-          log(room, `${actor.name} plays =0 (total: 0).`);
-          advanceAfterPlay();
-          return;
-        case "skip":
-          five.skipNext = true;
-          log(room, `${actor.name} plays Skip.`);
-          advanceAfterPlay();
-          return;
-        case "reverse":
-          five.direction = five.direction === 1 ? -1 : 1;
-          log(room, `${actor.name} plays Reverse.`);
-          advanceAfterPlay();
-          return;
-        case "draw1":
-          five.pendingDrawCount = 1;
-          log(room, `${actor.name} plays Draw 1.`);
-          advanceAfterPlay();
-          return;
-        case "draw2":
-          five.pendingDrawCount = 2;
-          log(room, `${actor.name} plays Draw 2.`);
-          advanceAfterPlay();
-          return;
-        case "bomb":
-          // Bomb: running total unchanged; next we collect 0-defuses from everyone else.
-          log(room, `${actor.name} plays Bomb.`);
-          five.skipNext = false;
-          five.pendingDrawCount = 0;
-          this.fiveAliveRedealIfEmpty(room, playerId);
-          if (this.fiveAliveMaybeWin(room)) return;
-          this.fiveAliveStartBombResolution(room, playerId);
-          return;
-        case "wild": {
-          const v = wildValue;
-          if (typeof v !== "number" || !Number.isFinite(v))
-            return;
-          const clamped = Math.max(0, Math.min(21, Math.floor(v)));
-          five.runningTotal = clamped;
-          log(room, `${actor.name} plays Wild (total: ${five.runningTotal}).`);
-          advanceAfterPlay();
-          return;
-        }
+      const result = resolveFiveAliveTurnPlay(
+        five,
+        card,
+        playerId,
+        this.fiveAliveSeats(room)
+      );
+      for (const line of result.logs) log(room, line);
+
+      const playAnn = fiveAlivePlayAnnouncement(
+        card,
+        actor.name,
+        this.fiveAliveSeats(room),
+        five,
+        result
+      );
+      if (playAnn) this.fiveAliveAnnounce(room, playAnn);
+
+      if (result.kind === "bust") {
+        doBust(result.reason);
+        return;
       }
+
+      if (result.kind === "bomb") {
+        if (this.fiveAliveMaybeWin(room)) return;
+        this.fiveAliveStartBombResolution(room, playerId);
+        return;
+      }
+
+      if (result.kind === "shuffle") {
+        five.pendingDrawCount = 0;
+        five.skipNext = false;
+        five.repeatTurnForPlayerId = null;
+        const nextTurn =
+          nextLivingSeatId(
+            this.fiveAliveSeats(room),
+            playerId,
+            five.direction,
+            1
+          ) ?? null;
+        if (!nextTurn) {
+          this.fiveAliveMaybeWin(room);
+          return;
+        }
+        this.beginFiveAliveDealing(
+          room,
+          "shuffle",
+          "Shuffle — total reset to 0",
+          nextTurn,
+          result.dealSteps
+        );
+        return;
+      }
+
+      if (this.fiveAliveAfterEmptyHandRoundEnd(room, playerId)) return;
+
+      if (this.fiveAliveMaybeWin(room)) return;
+      this.fiveAliveAdvanceToNextTurn(room, playerId);
+      return;
     }
 
     if (room.phase === "fivealive_bomb") {
       if (five.bombAwaitingPlayerId !== playerId) return;
 
+      const hand = five.handsByPlayerId[playerId] ?? [];
+
       if (pass) {
-        const hand = five.handsByPlayerId[playerId] ?? [];
-        const hasZero = hand.some((c) => isNumber0(c));
-        if (hasZero) return;
+        const hasDefuse = hand.some((c) => isBombDefuseCard(c));
+        if (hasDefuse) return;
         actor.lives = Math.max(0, (actor.lives ?? 0) - 1);
         actor.alive = (actor.lives ?? 0) > 0;
         log(room, `${actor.name} cannot defuse — lose 1 life.`);
+        this.fiveAliveAnnounce(
+          room,
+          fiveAliveBombResponseAnnouncement(actor.name, false)
+        );
       } else {
         const id = cardId ?? null;
         if (!id) return;
 
-        const hand = five.handsByPlayerId[playerId] ?? [];
         const idx = hand.findIndex((c) => c.id === id);
         if (idx < 0) return;
         const card = hand[idx] as FiveAliveCardInstance;
-        if (!isNumber0(card)) return;
+        if (!isBombDefuseCard(card)) return;
 
         hand.splice(idx, 1);
         five.centerPile.push(card);
-        log(room, `${actor.name} defuses with 0.`);
+        log(
+          room,
+          `${actor.name} defuses with ${cardLabel(card)}.`
+        );
+        this.fiveAliveAnnounce(
+          room,
+          fiveAliveBombResponseAnnouncement(actor.name, true, cardLabel(card))
+        );
       }
 
-      // Redeal if they emptied their hand as part of the response.
-      this.fiveAliveRedealIfEmpty(room, playerId);
+      // Round reset only after bomb chain if hand emptied (not before bomb starts).
+      if (this.fiveAliveAfterEmptyHandRoundEnd(room, playerId)) return;
       if (this.fiveAliveMaybeWin(room)) return;
 
       const idx = five.bombResponderIds.indexOf(playerId);
@@ -2945,7 +4040,63 @@ export class GameRuntime {
     const room = this.getRoom(roomId);
     if (!room) return;
     if (!room.voiceParticipants[channel].delete(playerId)) return;
+    room.voiceMutedIds.delete(playerId);
     this.broadcastVoiceParticipants(room, channel);
+    this.emitRoom(room);
+  }
+
+  setVoiceMuted(
+    roomId: string,
+    playerId: string,
+    channel: ChatChannel,
+    muted: boolean
+  ) {
+    const room = this.getRoom(roomId);
+    if (!room || isChatOnlyGame(room.gameId)) return;
+    if (!room.voiceParticipants[channel].has(playerId)) return;
+    if (muted) room.voiceMutedIds.add(playerId);
+    else room.voiceMutedIds.delete(playerId);
+    for (const socketId of this.voiceSocketIds(room, channel)) {
+      this.io.to(socketId).emit("voice:muted", {
+        channel,
+        playerId,
+        muted,
+      });
+    }
+    this.emitRoom(room);
+  }
+
+  hostVoiceMute(
+    roomId: string,
+    hostId: string,
+    targetId: string,
+    muted: boolean
+  ) {
+    const room = this.getRoom(roomId);
+    if (!room || !this.requireHost(room, hostId)) return;
+    if (isChatOnlyGame(room.gameId)) return;
+    const target = room.players.find((p) => p.id === targetId);
+    if (!target || target.isBot) return;
+
+    let channel: ChatChannel | null = null;
+    for (const ch of ["town", "mafia", "graveyard"] as ChatChannel[]) {
+      if (room.voiceParticipants[ch].has(targetId)) {
+        channel = ch;
+        break;
+      }
+    }
+    if (!channel) return;
+
+    if (muted) room.voiceMutedIds.add(targetId);
+    else room.voiceMutedIds.delete(targetId);
+
+    for (const socketId of this.voiceSocketIds(room, channel)) {
+      this.io.to(socketId).emit("voice:muted", {
+        channel,
+        playerId: targetId,
+        muted,
+      });
+    }
     this.emitRoom(room);
   }
 
@@ -3048,6 +4199,7 @@ export class GameRuntime {
     if (!player || player.isBot) return;
 
     const socketId = player.socketId;
+    const wasHost = player.isHost;
     this.removeFromAllVoice(room, player.id);
     this.leaveMafiaRooms(player, room.id);
 
@@ -3066,18 +4218,8 @@ export class GameRuntime {
       log(room, `${player.name} left the lobby.`);
     }
 
-    if (player.isHost) {
-      const next =
-        room.players.find(
-          (p) => p.id !== player.id && !p.isBot && p.socketId
-        ) ??
-        room.players.find((p) => p.id !== player.id && !p.isBot);
-      if (next) {
-        player.isHost = false;
-        next.isHost = true;
-        log(room, `${next.name} is now the host.`);
-      }
-    }
+    // Transfer before removing so the room keeps a human host (lobby or mid-game).
+    this.transferHostFrom(room, player);
 
     room.players = room.players.filter((p) => p.id !== playerId);
     room.afkWarnedPlayerIds = room.afkWarnedPlayerIds.filter(
@@ -3090,12 +4232,23 @@ export class GameRuntime {
     }
 
     const humansRemaining = room.players.filter((p) => !p.isBot);
+    // Only close when no real players remain (bots alone do not keep a room open).
     if (humansRemaining.length === 0) {
-      this.clearTimer(room);
-      this.clearBotTimers(room);
-      this.rooms.delete(room.id);
-      this.broadcastLobbies();
+      const reason =
+        room.phase === "lobby"
+          ? wasHost
+            ? "host_quit"
+            : "empty"
+          : "ended_empty";
+      void this.closeLobby(room, reason);
       return;
+    }
+
+    this.ensureHumanHost(room);
+
+    if (room.phase === "lobby") {
+      this.promoteConnectedHostIfNeeded(room);
+      this.syncLobbyHostOfflineIdle(room);
     }
 
     this.emitRoom(room);
@@ -3205,13 +4358,15 @@ export class GameRuntime {
     room.afkGraceEndsAt = null;
     room.afkGracePlayerId = null;
     room.fiveAlive = undefined;
-    room.detonationCats = undefined;
+    room.explodingKittens = undefined;
     room.spotIt = undefined;
     room.ttt = undefined;
     room.connect4 = undefined;
+    room.battleship = undefined;
     room.boardWinnerId = null;
     room.boardDraw = false;
     room.voiceParticipants = emptyVoiceChannels();
+    room.voiceMutedIds = new Set();
     this.emitRoom(room);
   }
 
@@ -3313,10 +4468,13 @@ export class GameRuntime {
       p.ready = false;
       p.role = "villager";
     }
+    // Randomize who opens — host is not guaranteed first / X.
+    const first = Math.random() < 0.5 ? a! : b!;
+    const second = first.id === a!.id ? b! : a!;
     room.ttt = {
       board: emptyTttBoard(),
-      turnPlayerId: a!.id,
-      marks: { [a!.id]: "X", [b!.id]: "O" },
+      turnPlayerId: first.id,
+      marks: { [first.id]: "X", [second.id]: "O" },
       winningLine: null,
       lastMove: null,
       result: "ongoing",
@@ -3327,7 +4485,7 @@ export class GameRuntime {
     room.cycle = 1;
     room.winner = null;
     room.logs = [];
-    log(room, "Tic-Tac-Toe — X goes first.");
+    log(room, `Tic-Tac-Toe — ${first.name} (X) goes first.`);
     this.setPhase(room, "ttt_play", boardTurnSeconds(room.settings.daySeconds));
     this.scheduleBots(room);
     this.emitRoom(room);
@@ -3381,7 +4539,7 @@ export class GameRuntime {
 
   private scheduleBoardGameOver(
     roomId: string,
-    gameId: "connect-4" | "tic-tac-toe",
+    gameId: "connect-4" | "tic-tac-toe" | "battleship",
     delayMs = 700
   ) {
     setTimeout(() => {
@@ -3390,9 +4548,17 @@ export class GameRuntime {
       if (gameId === "connect-4") {
         if (room.phase !== "connect4_play") return;
         if (!room.connect4 || room.connect4.result === "ongoing") return;
-      } else {
+      } else if (gameId === "tic-tac-toe") {
         if (room.phase !== "ttt_play") return;
         if (!room.ttt || room.ttt.result === "ongoing") return;
+      } else if (gameId === "battleship") {
+        if (
+          room.phase !== "battleship_play" &&
+          room.phase !== "gameover"
+        ) {
+          return;
+        }
+        if (!room.battleship || room.battleship.phase !== "gameover") return;
       }
       room.phase = "gameover";
       room.phaseEndsAt = null;
@@ -3479,6 +4645,163 @@ export class GameRuntime {
     this.emitRoom(room);
   }
 
+  private startBattleship(room: Room) {
+    if (room.players.length !== 2) {
+      throw new Error("Tactical Battleship needs exactly 2 players");
+    }
+    room.cycle = 1;
+    room.winner = null;
+    room.logs = [];
+    room.boardWinnerId = null;
+    room.boardDraw = false;
+    for (const p of room.players) {
+      p.role = undefined;
+      p.alive = true;
+      p.ready = false;
+      p.lives = undefined;
+      this.leaveMafiaRooms(p, room.id);
+    }
+    const ids = room.players.map((p) => p.id) as [string, string];
+    room.battleship = beginBattleship(ids);
+    log(room, "Tactical Battleship — place your fleets.");
+    this.setPhase(room, "battleship_setup", Math.max(60, boardTurnSeconds(room.settings.daySeconds) * 3));
+    this.scheduleBots(room);
+    this.emitRoom(room);
+  }
+
+  private afterBattleshipAction(room: Room) {
+    const bs = room.battleship;
+    if (!bs) return;
+    for (const line of bs.lastActionLog) {
+      log(room, line);
+    }
+    if (bs.phase === "gameover" && bs.winnerId) {
+      room.boardWinnerId = bs.winnerId;
+      room.phaseEndsAt = null;
+      this.clearTimer(room);
+      this.clearBotTimers(room);
+      this.emitRoom(room);
+      this.scheduleBoardGameOver(room.id, "battleship");
+      return;
+    }
+    if (bs.phase === "battle") {
+      this.setPhase(
+        room,
+        "battleship_play",
+        boardTurnSeconds(room.settings.daySeconds)
+      );
+    } else if (bs.phase === "setup") {
+      this.setPhase(
+        room,
+        "battleship_setup",
+        Math.max(60, boardTurnSeconds(room.settings.daySeconds) * 3)
+      );
+    }
+    this.scheduleBots(room);
+    this.emitRoom(room);
+  }
+
+  submitBattleshipReady(
+    roomId: string,
+    playerId: string,
+    fleet: FleetPlacement | { type: string; cells: { col: number; row: number }[] }[]
+  ) {
+    const room = this.getRoom(roomId);
+    if (!room || room.paused || room.gameId !== "battleship") return;
+    if (room.phase !== "battleship_setup" || !room.battleship) return;
+    const normalized: FleetPlacement = fleet.map((s) => ({
+      type: s.type as FleetPlacement[number]["type"],
+      cells: s.cells.map((c) => ({ col: c.col, row: c.row })),
+      hits:
+        "hits" in s && Array.isArray(s.hits)
+          ? (s.hits as boolean[])
+          : s.cells.map(() => false),
+      sunk: "sunk" in s ? !!(s as { sunk?: boolean }).sunk : false,
+    }));
+    room.battleship = submitFleetReady(room.battleship, playerId, normalized);
+    if (room.battleship.phase === "battle") {
+      log(room, "Both fleets locked — battle begins!");
+    }
+    this.afterBattleshipAction(room);
+  }
+
+  submitBattleshipFire(
+    roomId: string,
+    playerId: string,
+    col: number,
+    row: number
+  ) {
+    const room = this.getRoom(roomId);
+    if (!room || room.paused || room.gameId !== "battleship") return;
+    if (room.phase !== "battleship_play" || !room.battleship) return;
+    room.battleship = fireStandardShot(room.battleship, playerId, col, row);
+    this.afterBattleshipAction(room);
+  }
+
+  submitBattleshipPowerUp(
+    roomId: string,
+    playerId: string,
+    type: PowerUpType,
+    opts: {
+      col: number;
+      row: number;
+      orientation?: Orientation;
+      direction?: TorpedoDirection;
+    }
+  ) {
+    const room = this.getRoom(roomId);
+    if (!room || room.paused || room.gameId !== "battleship") return;
+    if (room.phase !== "battleship_play" || !room.battleship) return;
+    room.battleship = triggerPowerUp(room.battleship, playerId, type, opts);
+    this.afterBattleshipAction(room);
+  }
+
+  submitBattleshipRematch(roomId: string, playerId: string) {
+    const room = this.getRoom(roomId);
+    if (!room || room.gameId !== "battleship") return;
+    if (room.phase !== "gameover") return;
+    if (!this.requireHost(room, playerId)) return;
+    if (!room.battleship) return;
+    room.battleship = rematchBattleship(room.battleship);
+    room.boardWinnerId = null;
+    room.boardDraw = false;
+    room.logs = [];
+    log(room, "Rematch — place fleets again.");
+    this.setPhase(
+      room,
+      "battleship_setup",
+      Math.max(60, boardTurnSeconds(room.settings.daySeconds) * 3)
+    );
+    this.scheduleBots(room);
+    this.emitRoom(room);
+  }
+
+  private onTimeoutBattleship(roomId: string) {
+    const room = this.getRoom(roomId);
+    if (!room || room.paused || room.gameId !== "battleship" || !room.battleship)
+      return;
+    const bs = room.battleship;
+    if (room.phase === "battleship_setup") {
+      for (const p of room.players) {
+        if (!bs.ready[p.id]) {
+          room.battleship = autoReadyRandomFleet(room.battleship, p.id);
+          log(room, `${p.name} timed out — fleet auto-placed.`);
+        }
+      }
+      this.afterBattleshipAction(room);
+      return;
+    }
+    if (room.phase === "battleship_play" && bs.turnPlayerId) {
+      const turnId = bs.turnPlayerId;
+      room.battleship = applyBotBattleAction(bs, turnId);
+      log(
+        room,
+        `${room.players.find((p) => p.id === turnId)?.name ?? "Player"} timed out — auto strike.`
+      );
+      this.afterBattleshipAction(room);
+    }
+  }
+
   disconnect(socketId: string) {
     for (const room of this.rooms.values()) {
       const specIdx = room.spectators.findIndex((s) => s.socketId === socketId);
@@ -3494,28 +4817,18 @@ export class GameRuntime {
     this.removeFromAllVoice(room, player.id);
     player.socketId = null;
 
-    if (player.isHost) {
-      const next = room.players.find(
-        (p) => !p.isBot && p.socketId && p.id !== player.id
-      );
-      if (next) {
-        player.isHost = false;
-        next.isHost = true;
-        log(room, `${next.name} is now the host.`);
-      }
-    }
+    // Keep seat for reconnect; move host to another connected human when possible
+    // so the room does not idle-close (or lose host controls) for players still in.
+    // Presence = socketId only — mouse/tab idle never reaches this path.
+    this.transferHostFrom(room, player);
+    this.ensureHumanHost(room);
+    this.promoteConnectedHostIfNeeded(room);
 
     if (room.phase === "lobby") {
-      // keep seat for a short reconnect window; drop if nobody is connected
+      // Alone / all humans offline → start 5min host_afk. New host online → clear.
+      this.syncLobbyHostOfflineIdle(room);
     }
-
-    const anyoneConnected = room.players.some((p) => p.socketId);
-    if (!anyoneConnected && room.phase === "lobby") {
-      this.clearTimer(room);
-      this.rooms.delete(room.id);
-      this.broadcastLobbies();
-      return;
-    }
+    void this.sweepExpiredLobbies();
     this.emitRoom(room);
   }
 }

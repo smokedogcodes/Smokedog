@@ -73,7 +73,11 @@ const RULES_BY_GAME: Record<string, GameRules> = {
       },
       {
         title: "Turns",
-        body: "A turn timer keeps the duel moving. Miss your window and the turn may pass — stay ready.",
+        body: "Who opens is random each match — the host is not guaranteed first. A turn timer (10–60s) keeps the duel moving.",
+      },
+      {
+        title: "Comms",
+        body: "Public chat and voice stay open for the whole match so you can talk while you play.",
       },
       {
         title: "Winning",
@@ -110,8 +114,42 @@ const RULES_BY_GAME: Record<string, GameRules> = {
         body: "Bombs demand an instant 0. Miss the window and you take the hit.",
       },
       {
-        title: "Status",
-        body: "5 Alive is under maintenance right now. Rules stay here so you know what returns.",
+        title: "Wild cards",
+        body: "Skip, reverse, draw +1/+2, and bombs shake up the pile. Wild cards let you reset the running total when you're in trouble.",
+      },
+    ],
+  },
+  "exploding-kittens": {
+    title: "Exploding Kittens — how it works",
+    sections: [
+      {
+        title: "Turn structure",
+        body: "Play any number of valid cards, then draw one card from the pile. If you draw an Exploding Kitten without a Defuse, you're out.",
+      },
+      {
+        title: "Combos & interrupts",
+        body: "Match cat pairs to steal, triples to demand a card type, or five different cats to pick from discard. Nope cards cancel actions during a short reaction window.",
+      },
+      {
+        title: "Attack & Favor",
+        body: "Attack passes multiple turns to the next player. Favor forces an opponent to give you a card of their choice.",
+      },
+    ],
+  },
+  "detonation-cats": {
+    title: "Exploding Kittens — how it works",
+    sections: [
+      {
+        title: "Turn structure",
+        body: "Play any number of valid cards, then draw one card from the pile. If you draw an Exploding Kitten without a Defuse, you're out.",
+      },
+      {
+        title: "Combos & interrupts",
+        body: "Match cat pairs to steal, triples to demand a card type, or five different cats to pick from discard. Nope cards cancel actions during a short reaction window.",
+      },
+      {
+        title: "Attack & Favor",
+        body: "Attack passes multiple turns to the next player. Favor forces an opponent to give you a card of their choice.",
       },
     ],
   },

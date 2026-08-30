@@ -17,8 +17,8 @@ Open [http://localhost:3000](http://localhost:3000). The custom `server.ts` serv
 
 | Layer | Worker | URL |
 | --- | --- | --- |
-| **UI** | `smokedog` | https://smokedog.balmeek544.workers.dev |
-| **Game server** | `smokedog-game` | https://smokedog-game.balmeek544.workers.dev |
+| **UI** | `sd` | https://sd.smokedog.workers.dev |
+| **Game server** | `sd-game` | https://sd-game.smokedog.workers.dev |
 
 The UI reads **`NEXT_PUBLIC_SOCKET_URL`** from `wrangler.jsonc` (baked in at deploy). The game worker runs Socket.io via Durable Objects.
 

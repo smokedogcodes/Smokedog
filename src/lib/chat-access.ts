@@ -21,7 +21,13 @@ export function canAccessChannel(
 ): boolean {
   if (channel === "graveyard") return !opts.alive;
   if (channel === "town") {
-    if (opts.phase === "fivealive_turn" || opts.phase === "fivealive_bomb") {
+    if (
+      opts.phase === "fivealive_turn" ||
+      opts.phase === "fivealive_bomb" ||
+      opts.phase === "fivealive_dealing" ||
+      opts.phase === "ttt_play" ||
+      opts.phase === "spotit_play"
+    ) {
       return opts.alive && !opts.blackmailed;
     }
     // Alive town chat (send+read) during day

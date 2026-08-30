@@ -11,9 +11,11 @@
     "build:cf": "npm run build && opennextjs-cloudflare build --skipNextBuild",
     "preview:cf": "npm run build:cf && opennextjs-cloudflare preview",
     "deploy:cf": "npm run build:cf && opennextjs-cloudflare deploy",
+    "deploy:cf:win": "powershell -ExecutionPolicy Bypass -File scripts/deploy-cf-win.ps1",
     "deploy:cf:game": "wrangler deploy -c wrangler.game.jsonc",
     "deploy:cf:all": "npm run deploy:cf:game && npm run deploy:cf",
-    "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
+    "test": "tsx --test src/lib/games/exploding-kittens/reducer.test.ts src/lib/games/battleship/reducer.test.ts"
   },
   "dependencies": {
     "canvas-confetti": "^1.9.3",

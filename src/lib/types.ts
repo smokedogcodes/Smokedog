@@ -21,13 +21,18 @@ export type Phase =
   | "gameover"
   | "fivealive_turn"
   | "fivealive_bomb"
+  | "fivealive_dealing"
   | "ek_turn"
   | "ek_defuse"
   | "ek_pick_discard"
   | "ek_steal"
+  | "ek_favor"
+  | "ek_triple"
   | "spotit_play"
   | "ttt_play"
-  | "connect4_play";
+  | "connect4_play"
+  | "battleship_setup"
+  | "battleship_play";
 
 export type DaySubPhase = "discussion" | "vote";
 
@@ -115,6 +120,10 @@ export const REVEAL_SECONDS = 20;
 export const DAY_VOTE_SECONDS = 15;
 export const SKIP_VOTE_ID = "__skip__";
 export const AFK_GRACE_MS = 10000;
+/** Lobby closes after host socket is offline this long (not while host is connected / waiting). */
+export const LOBBY_HOST_IDLE_MS = 5 * 60 * 1000;
+/** Progressive host-offline warnings (ms after host socket disconnect). Final entry triggers close. */
+export const LOBBY_HOST_WARN_AT_MS = [30_000, 60_000, LOBBY_HOST_IDLE_MS] as const;
 
 export interface Player {
   id: string;
@@ -208,6 +217,8 @@ export interface PublicGameState {
   dayVotesIn: number;
   dayVotesNeeded: number;
   voiceParticipants: Partial<Record<ChatChannel, string[]>>;
+  /** Player IDs currently self-muted or host-muted in voice. */
+  voiceMutedIds: string[];
   autoPlayerCount: number;
   daySubPhase?: DaySubPhase;
   announcement?: PhaseAnnouncement | null;
@@ -224,10 +235,11 @@ export interface PublicGameState {
   deadVillagerVote?: boolean;
   // Optional per-game state for 5 Alive.
   fiveAlive?: FiveAlivePublicState;
-  detonationCats?: DetonationCatsPublicState;
+  explodingKittens?: ExplodingKittensPublicState;
   spotIt?: SpotItPublicState;
   ttt?: TttPublicState;
   connect4?: Connect4PublicState;
+  battleship?: BattleshipPublicState;
   boardWinnerId?: string | null;
   boardDraw?: boolean;
   /** External observer — not seated as a player. */
@@ -261,49 +273,91 @@ export type Connect4PublicState = {
   winnerId?: string | null;
 };
 
+export type {
+  BattleshipPublicState,
+  PublicGridCell,
+  PublicShipStatus,
+} from "@/lib/games/battleship/selectors";
+
 export type PublicFiveAliveCard = {
   id: string;
   type:
     | "number"
     | "eq21"
+    | "eq10"
     | "reset0"
     | "skip"
     | "reverse"
+    | "passmeby"
+    | "shuffle"
     | "draw1"
     | "draw2"
-    | "bomb"
-    | "wild";
+    | "bomb";
   value?: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 };
 
-export type PublicDcCard = {
+export type PublicEkCard = {
   id: string;
   type:
-    | "detonation"
+    | "exploding_kitten"
     | "defuse"
     | "skip"
     | "attack"
+    | "favor"
     | "shuffle"
     | "see_future"
+    | "nope"
     | "taco_cat"
     | "beard_cat"
-    | "rainbow_cat"
-    | "potato_cat"
-    | "melon_cat";
+    | "rainbow_ralphing_cat"
+    | "hairy_potato_cat"
+    | "cattermelon";
 };
 
-export type DetonationCatsPublicState = {
+/** @deprecated Use PublicEkCard */
+export type PublicDcCard = PublicEkCard;
+
+export type ExplodingKittensPublicState = {
   turnPlayerId: string | null;
-  pendingTurns: number;
-  yourHand: PublicDcCard[];
+  turnsRemaining: number;
+  subPhase: "play" | "draw";
+  yourHand: PublicEkCard[];
   drawPileCount: number;
   discardCount: number;
-  discardTop: PublicDcCard | null;
-  seeFutureCards: PublicDcCard[] | null;
+  discardTop: PublicEkCard | null;
+  discardPreview: PublicEkCard[];
+  seeFutureCards: PublicEkCard[] | null;
   awaitingDefuse: boolean;
   awaitingPickDiscard: boolean;
   awaitingStealTarget: boolean;
+  awaitingFavorGive: boolean;
+  awaitingFavorTarget: boolean;
+  awaitingTripleDeclare: boolean;
   stealTargetIds: string[];
+  opponentHandCounts: Record<string, number>;
+  nopeWindowEndsAt: number | null;
+  nopeEligible: boolean;
+  pendingActionKind: string | null;
+};
+
+/** @deprecated Use ExplodingKittensPublicState */
+export type DetonationCatsPublicState = ExplodingKittensPublicState;
+
+export type FiveAliveDealKind = "initial" | "round_reset" | "shuffle";
+
+export type FiveAliveDealEvent = {
+  seq: number;
+  kind: FiveAliveDealKind;
+  banner: string | null;
+  staggerMs: number;
+  /** Cards left to deal from the visual deal pile (starts at steps.length). */
+  sourceCount: number;
+  steps: Array<{
+    playerId: string;
+    cardIndex: number;
+    /** Full card data for the viewing player's dealt cards. */
+    card?: PublicFiveAliveCard;
+  }>;
 };
 
 export type FiveAlivePublicState = {
@@ -320,6 +374,14 @@ export type FiveAlivePublicState = {
   discardPileCount: number;
   centerPileCount: number;
   centerTopCard: PublicFiveAliveCard | null;
+  /** Last 2–3 cards on the center pile (oldest → newest), for the fan UI. */
+  centerRecentCards?: PublicFiveAliveCard[];
+  /** Active while phase === fivealive_dealing */
+  dealEvent?: FiveAliveDealEvent | null;
+  /** Hand size per player (all seats, including you). */
+  handCounts?: Record<string, number>;
+  opponentHandCounts?: Record<string, number>;
+  isDealing?: boolean;
 };
 
 export type VoiceSignalPayload =
@@ -405,32 +467,56 @@ export type ClientToServerEvents = {
   }) => void;
   "ek:playCards": (payload: { roomId: string; cardIds: string[] }) => void;
   "ek:endTurn": (payload: { roomId: string }) => void;
+  "ek:draw": (payload: { roomId: string }) => void;
+  "ek:nope": (payload: { roomId: string; cardId: string }) => void;
   "ek:placeDefuse": (payload: { roomId: string; deckIndex: number }) => void;
   "ek:pickDiscard": (payload: { roomId: string; discardIndex: number }) => void;
   "ek:stealTarget": (payload: { roomId: string; targetId: string }) => void;
+  "ek:favorTarget": (payload: { roomId: string; targetId: string }) => void;
+  "ek:favorGive": (payload: { roomId: string; cardId: string }) => void;
+  "ek:tripleDeclare": (payload: {
+    roomId: string;
+    targetId: string;
+    cardType: PublicEkCard["type"];
+  }) => void;
   "spotit:submitMatch": (payload: {
     roomId: string;
     symbolId: number;
   }) => void;
   "ttt:move": (payload: { roomId: string; cellIndex: number }) => void;
   "connect4:drop": (payload: { roomId: string; column: number }) => void;
+  "battleship:ready": (payload: {
+    roomId: string;
+    fleet: {
+      type: string;
+      cells: { col: number; row: number }[];
+    }[];
+  }) => void;
+  "battleship:fire": (payload: {
+    roomId: string;
+    col: number;
+    row: number;
+  }) => void;
+  "battleship:powerup": (payload: {
+    roomId: string;
+    type: "sonar" | "cluster" | "torpedo" | "smoke" | "recon";
+    col: number;
+    row: number;
+    orientation?: "horizontal" | "vertical";
+    direction?: "N" | "S" | "E" | "W";
+  }) => void;
+  "battleship:rematch": (payload: { roomId: string }) => void;
   "chat:send": (payload: {
     roomId: string;
     channel: ChatChannel;
     text: string;
   }) => void;
   "host:kick": (payload: { roomId: string; playerId: string }) => void;
-  "host:pause": (payload: { roomId: string }) => void;
-  "host:resume": (payload: { roomId: string }) => void;
+  "host:pause": (payload: { roomId: string; playerId?: string }) => void;
+  "host:resume": (payload: { roomId: string; playerId?: string }) => void;
   "lobby:return": (payload: { roomId: string }) => void;
   "lobbies:list": (payload?: { query?: string }) => void;
   "games:listLive": (payload?: { query?: string }) => void;
-  "room:spectate": (payload: {
-    roomId: string;
-    playerId: string;
-    name: string;
-    avatarId: number;
-  }) => void;
   "host:skipDay": (payload: { roomId: string }) => void;
   "host:skipTimer": (payload: { roomId: string }) => void;
   "voice:join": (payload: { roomId: string; channel: ChatChannel }) => void;
@@ -450,6 +536,31 @@ export type ClientToServerEvents = {
     roomId: string;
     channel: ChatChannel;
     speaking: boolean;
+  }) => void;
+  "voice:muted": (payload: {
+    roomId: string;
+    channel: ChatChannel;
+    muted: boolean;
+  }) => void;
+  "host:voiceMute": (payload: {
+    roomId: string;
+    targetId: string;
+    muted: boolean;
+  }) => void;
+  "admin:login": (payload: { user: string; password: string }) => void;
+  "admin:resume": (payload: { token: string }) => void;
+  "admin:snapshot": (payload?: { token?: string }) => void;
+  "admin:roomLookup": (payload: { code: string; token?: string }) => void;
+  "admin:analytics": (payload?: {
+    range?: "day" | "week" | "month";
+    days?: number;
+    token?: string;
+  }) => void;
+  "analytics:pageView": (payload: {
+    path: string;
+    playerId?: string;
+    roomId?: string;
+    gameId?: string;
   }) => void;
 };
 
@@ -479,6 +590,137 @@ export type ServerToClientEvents = {
     name: string;
     afkCount: number;
   }) => void;
+  "lobby:idleWarning": (payload: {
+    stage: 1 | 2 | 3;
+    closesInMs: number;
+    message: string;
+    isFinal?: boolean;
+  }) => void;
+  "admin:auth": (payload: { ok: boolean; message?: string; token?: string }) => void;
+  "admin:snapshot": (payload: {
+    roomsOpen: Array<{
+      code: string;
+      gameId: string;
+      phase: string;
+      paused: boolean;
+      players: number;
+      connected?: number;
+      bots?: number;
+      host: string | null;
+      createdAt: number;
+      lobbyIdleDeadlineAt?: number | null;
+    }>;
+    roomEvents: Array<{
+      id: string;
+      code: string;
+      hostName: string;
+      gameId: string;
+      openedAt: number;
+      closedAt: number | null;
+      reason: string | null;
+    }>;
+    gameLogs: Array<{
+      id: string;
+      at: number;
+      level: "info" | "error" | "exception";
+      roomId?: string;
+      message: string;
+    }>;
+    health: {
+      ok: boolean;
+      roomCount: number;
+      at: number;
+      storedRoomEvents?: number;
+      storedGameLogs?: number;
+      socketHost?: string;
+    };
+  }) => void;
+  "admin:roomLookup": (payload: {
+    code: string;
+    found: boolean;
+    live: {
+      code: string;
+      gameId: string;
+      phase: string;
+      paused: boolean;
+      createdAt: number;
+      lobbyIdleDeadlineAt: number | null;
+      host: string | null;
+      players: Array<{
+        id: string;
+        name: string;
+        isHost: boolean;
+        isBot: boolean;
+        alive: boolean;
+        connected: boolean;
+      }>;
+    } | null;
+    roomEvents: Array<{
+      id: string;
+      code: string;
+      hostName: string;
+      gameId: string;
+      openedAt: number;
+      closedAt: number | null;
+      reason: string | null;
+    }>;
+    gameLogs: Array<{
+      id: string;
+      at: number;
+      level: "info" | "error" | "exception";
+      roomId?: string;
+      message: string;
+    }>;
+  }) => void;
+  "admin:analytics": (payload: {
+    range: "day" | "week" | "month" | "custom";
+    days: number;
+    since: number;
+    until: number;
+    totals: {
+      visits: number;
+      roomsCreated: number;
+      roomJoins: number;
+      roomsClosed: number;
+      gamesStarted: number;
+      uniquePlayers: number;
+      events: number;
+      avgRoomDurationMs: number | null;
+    };
+    series: Array<{
+      day: string;
+      visits: number;
+      rooms: number;
+      joins: number;
+      games: number;
+      players: number;
+    }>;
+    byGame: Array<{
+      gameId: string;
+      rooms: number;
+      games: number;
+      joins: number;
+    }>;
+    byRegion: Array<{
+      country: string;
+      visits: number;
+      players: number;
+      rooms: number;
+    }>;
+    byRoom: Array<{
+      roomId: string;
+      gameId: string;
+      opens: number;
+      joins: number;
+      games: number;
+      closes: number;
+    }>;
+    byPath: Array<{ path: string; visits: number }>;
+    meta: {
+      oldestEventAt: number | null;
+      retentionDays: number;
+    };
+  }) => void;
   "game:over": (payload: { winner: Faction; recap: PublicPlayer[] }) => void;
   "room:error": (payload: { message: string; code?: string }) => void;
   "room:left": () => void;
@@ -503,6 +745,11 @@ export type ServerToClientEvents = {
     channel: ChatChannel;
     playerId: string;
     speaking: boolean;
+  }) => void;
+  "voice:muted": (payload: {
+    channel: ChatChannel;
+    playerId: string;
+    muted: boolean;
   }) => void;
   "spotit:matchResolved": (payload: {
     winnerId: string;

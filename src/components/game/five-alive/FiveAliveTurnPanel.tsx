@@ -1,152 +1,153 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef } from "react";
 import type { PublicFiveAliveCard, PublicGameState } from "@/lib/types";
 import { GlassPanel } from "@/components/ui/primitives";
-import { FiveAliveHand, useCardThrow } from "./FiveAliveHand";
-import { FiveAliveLifeTracker, FiveAliveTable } from "./FiveAliveTable";
-
-function clampTurnValue(v: number) {
-  const n = Math.floor(v);
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(21, n));
-}
+import {
+  canPlayFiveAliveCardAtTotal,
+  handHasPlayableCard,
+} from "@/lib/games/5-alive/rules";
+import { FiveAliveFlyingCard } from "@/components/mockups/five-alive/FiveAliveFlyingCard";
+import { FiveAliveHand } from "./FiveAliveHand";
+import {
+  FA_BOARD_PANEL_CLASS,
+  FA_BOARD_PANEL_STYLE,
+  FA_HAND_PANEL_CLASS,
+  FA_HAND_PANEL_STYLE,
+  FiveAliveLifeTracker,
+} from "./FiveAliveTable";
+import { useFiveAliveCardFly } from "./useFiveAliveCardFly";
+import { useFiveAliveLifeLoss } from "./useFiveAliveLifeLoss";
 
 export function FiveAliveTurnPanel({
   state,
+  paused = false,
   onPlay,
+  onInviteVoice,
 }: {
   state: PublicGameState;
-  onPlay: (payload: { cardId: string; wildValue?: number }) => void;
+  paused?: boolean;
+  onPlay: (payload: { cardId?: string; pass?: boolean }) => void;
+  onInviteVoice?: (playerId: string) => void;
 }) {
   const five = state.fiveAlive;
   const you = state.you;
 
   const yourTurn = !!five && five.turnPlayerId === you?.id;
   const youAlive = !!you?.alive;
+  const { lifeAnim, actionsBlocked } = useFiveAliveLifeLoss(state.players);
+  const autoPassKeyRef = useRef<string | null>(null);
 
-  const [wildCardId, setWildCardId] = useState<string | null>(null);
-  const [wildValue, setWildValue] = useState<number>(five?.runningTotal ?? 0);
-  const { throwingCardId, throwCard, isThrowing } = useCardThrow();
+  const {
+    fly,
+    hiddenCardId,
+    centerPlaceholder,
+    isBusy,
+    centerRef,
+    registerCardRef,
+    startPlayFly,
+    onFlyComplete,
+  } = useFiveAliveCardFly();
 
   const yourHand = five?.yourHand ?? [];
-  const turnPlayer = five?.turnPlayerId
-    ? state.players.find((p) => p.id === five.turnPlayerId)
-    : undefined;
+  const runningTotal = five?.runningTotal ?? 0;
+  const turnPlayerId = five?.turnPlayerId ?? null;
+
+  const atTwentyOne = runningTotal === 21;
+  const locked = !yourTurn || !youAlive || isBusy || actionsBlocked || paused;
+  const hasPlayableCard = handHasPlayableCard(yourHand, runningTotal);
+  const autoStuck = yourTurn && youAlive && yourHand.length > 0 && !hasPlayableCard;
+  const handKey = yourHand.map((c) => c.id).join(",");
+
+  useEffect(() => {
+    if (!five || !autoStuck || locked || paused) return;
+    const key = `${turnPlayerId}-${runningTotal}-${handKey}`;
+    if (autoPassKeyRef.current === key) return;
+    autoPassKeyRef.current = key;
+    onPlay({ pass: true });
+  }, [five, autoStuck, locked, paused, turnPlayerId, runningTotal, handKey, onPlay]);
 
   if (!five) return null;
 
+  const playableFilter = (card: PublicFiveAliveCard) =>
+    canPlayFiveAliveCardAtTotal(card, five.runningTotal);
+
   const handleSelect = (card: PublicFiveAliveCard) => {
-    if (!yourTurn || !youAlive || isThrowing) return;
-    if (card.type === "wild") {
-      setWildCardId(card.id);
-      setWildValue(five.runningTotal);
-      return;
-    }
-    throwCard(card.id, () => onPlay({ cardId: card.id }));
+    if (locked) return;
+    if (!canPlayFiveAliveCardAtTotal(card, five.runningTotal)) return;
+    startPlayFly(card, () => onPlay({ cardId: card.id }));
   };
 
   return (
-    <div className="space-y-4">
-      <GlassPanel className="p-4">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="font-mono text-[10px] uppercase tracking-widest text-ink-steel">
-              {yourTurn ? "Your turn" : "Waiting"}
-            </p>
-            <p className="mt-1 text-sm text-ink-steel">
-              {yourTurn
-                ? "Tap a card to play it to the center pile."
-                : `Waiting for ${turnPlayer?.name ?? "next player"}.`}
-            </p>
-            {five.pendingDrawCount > 0 && (
-              <p className="mt-2 font-mono text-[10px] uppercase tracking-widest text-[#457b9d]">
-                Next player draws {five.pendingDrawCount}
-              </p>
-            )}
-          </div>
-          <div className="text-right">
-            <p className="font-mono text-[10px] uppercase tracking-widest text-ink-steel">
-              Your lives
-            </p>
-            <div className="mt-1 text-3xl font-display font-extrabold">
-              {state.players.find((p) => p.id === you?.id)?.lives ?? 0}
-            </div>
-          </div>
-        </div>
+    <div className="space-y-3 sm:space-y-4">
+      <GlassPanel className={`${FA_BOARD_PANEL_CLASS} p-2 sm:p-3`} style={FA_BOARD_PANEL_STYLE}>
+        {five.pendingDrawCount > 0 ? (
+          <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[#457b9d]">
+            Next draws {five.pendingDrawCount}, then turn passes
+          </p>
+        ) : null}
+        {autoStuck ? (
+          <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[#8B1E1E]">
+            No playable cards — losing 1 life…
+          </p>
+        ) : null}
+        {yourTurn && atTwentyOne && !autoStuck ? (
+          <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[#457b9d]">
+            Total is 21 — play 0, =0/=10/=21, or an action
+          </p>
+        ) : null}
 
-        <div className="mt-4">
-          <FiveAliveLifeTracker
-            players={state.players}
-            turnPlayerId={five.turnPlayerId}
-          />
-        </div>
+        <FiveAliveLifeTracker
+          players={state.players}
+          turnPlayerId={five.turnPlayerId}
+          direction={five.direction}
+          skipNext={five.skipNext}
+          lifeAnim={lifeAnim}
+          youId={you?.id ?? null}
+          onInviteVoice={onInviteVoice}
+          five={five}
+          centerRef={(el) => {
+            centerRef.current = el;
+          }}
+          centerPlaceholder={centerPlaceholder}
+        />
       </GlassPanel>
 
-      <GlassPanel className="p-4">
-        <FiveAliveTable five={five} />
-      </GlassPanel>
-
-      <GlassPanel className="p-4">
-        <h3 className="font-display text-xl font-bold">Your hand</h3>
+      <GlassPanel
+        className={`${FA_HAND_PANEL_CLASS} p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4`}
+        style={FA_HAND_PANEL_STYLE}
+      >
+        <h3 className="font-sans text-lg font-bold uppercase tracking-wide text-[#7D2D2D] sm:text-xl">
+          Your hand
+        </h3>
         {!yourTurn && (
-          <p className="mt-1 text-sm text-ink-steel">Locked until it&apos;s your turn.</p>
+          <p className="mt-1 text-sm text-[#7D2D2D]/70">Locked until your turn.</p>
         )}
         {yourTurn && !youAlive && (
-          <p className="mt-1 text-sm text-ink-steel">
-            You&apos;re eliminated. Spectating the turn.
-          </p>
+          <p className="mt-1 text-sm text-[#7D2D2D]/70">Eliminated — spectating.</p>
+        )}
+        {paused && (
+          <p className="mt-1 text-sm text-[#8B1E1E]">Paused — host must resume.</p>
+        )}
+        {actionsBlocked && (
+          <p className="mt-1 text-sm text-[#8B1E1E]">Life lost — wait for the flip…</p>
         )}
 
-        <div className="mt-4">
+        <div className="mt-2 pt-1 sm:mt-4">
           <FiveAliveHand
             cards={yourHand}
-            disabled={!yourTurn || !youAlive}
-            throwingCardId={throwingCardId}
-            selectedCardId={wildCardId}
+            disabled={locked || autoStuck}
+            hiddenCardId={hiddenCardId}
+            playableFilter={yourTurn ? playableFilter : undefined}
+            registerCardRef={registerCardRef}
             onSelect={handleSelect}
           />
         </div>
-
-        {wildCardId && (
-          <div className="mt-4 rounded-sm border border-[#8B1E1E]/40 bg-[#8B1E1E]/10 p-4">
-            <p className="font-mono text-[10px] uppercase tracking-widest text-crimson-glow">
-              Wild: choose new running total
-            </p>
-            <input
-              type="number"
-              min={0}
-              max={21}
-              value={wildValue}
-              onChange={(e) => setWildValue(clampTurnValue(Number(e.target.value)))}
-              className="mt-2 w-24 rounded-sm border border-crimson/20 bg-surface-high px-2 py-2 font-mono text-sm"
-            />
-            <div className="mt-3 flex gap-2">
-              <button
-                type="button"
-                onClick={() => setWildCardId(null)}
-                className="rounded-sm border border-crimson/20 bg-crimson/[0.04] px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-ink-steel"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={isThrowing}
-                onClick={() => {
-                  if (!wildCardId) return;
-                  throwCard(wildCardId, () => {
-                    onPlay({ cardId: wildCardId, wildValue });
-                    setWildCardId(null);
-                  });
-                }}
-                className="flex-1 rounded-sm bg-crimson px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-manila shadow-glow"
-              >
-                Play Wild
-              </button>
-            </div>
-          </div>
-        )}
       </GlassPanel>
+
+      {fly ? (
+        <FiveAliveFlyingCard payload={fly} onComplete={onFlyComplete} />
+      ) : null}
     </div>
   );
 }

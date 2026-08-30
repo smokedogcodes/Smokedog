@@ -2,8 +2,8 @@
 
 import { useCallback, useState } from "react";
 
-export const FA_DRAW_MS = 480;
-export const FA_PLAY_MS = 520;
+export const FA_DRAW_MS = 980;
+export const FA_PLAY_MS = 880;
 export const FA_EASE = [0.22, 1, 0.36, 1] as const;
 
 export function useFiveAliveTableAnimation() {

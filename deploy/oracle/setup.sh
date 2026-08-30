@@ -4,7 +4,7 @@ set -euo pipefail
 
 REPO="${REPO:-https://github.com/elorakart/Smokedog.git}"
 APP_DIR="${APP_DIR:-$HOME/Smokedog}"
-CORS_ORIGIN="${CORS_ORIGIN:-https://smokedog.balmeek544.workers.dev}"
+CORS_ORIGIN="${CORS_ORIGIN:-https://sd.smokedog.workers.dev}"
 
 echo "==> Installing Node.js 20..."
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -

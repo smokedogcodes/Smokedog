@@ -11,7 +11,7 @@ User=ubuntu
 WorkingDirectory=/home/ubuntu/Smokedog
 Environment=NODE_ENV=production
 Environment=PORT=3001
-Environment=CORS_ORIGIN=https://smokedog.balmeek544.workers.dev
+Environment=CORS_ORIGIN=https://sd.smokedog.workers.dev
 ExecStart=/usr/bin/npm run start:game
 Restart=always
 RestartSec=5

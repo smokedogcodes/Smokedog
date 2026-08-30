@@ -7,7 +7,7 @@ export const fiveAliveModule: GameModule = {
   displayName: "5 Alive",
   minPlayers: 2,
   maxPlayers: 6,
-  status: "maintenance",
+  status: "live",
   createSettings(): RoomSettings {
     // Reuse the shared RoomSettings for timer plumbing.
     // - We'll interpret `daySeconds` as "turn seconds" for 5 Alive.

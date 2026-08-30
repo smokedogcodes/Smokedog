@@ -1,13 +1,13 @@
 "use client";
 
 import {
+  BookOpen,
   Copy,
   LogOut,
   Menu,
   Pause,
   Play,
   Shield,
-  SkipForward,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -27,18 +27,20 @@ export function GameHud({
   state,
   onPause,
   onResume,
-  onSkipTimer,
   onQuit,
   onSettings,
   quitting = false,
+  knowGame = false,
+  onKnowGameChange,
 }: {
   state: PublicGameState;
   onPause: () => void;
   onResume: () => void;
-  onSkipTimer?: () => void;
   onQuit: () => void;
   onSettings?: (settings: Partial<import("@/lib/types").RoomSettings>) => void;
   quitting?: boolean;
+  knowGame?: boolean;
+  onKnowGameChange?: (value: boolean) => void;
 }) {
   const [now, setNow] = useState(Date.now());
   const [menuOpen, setMenuOpen] = useState(false);
@@ -79,28 +81,26 @@ export function GameHud({
         : `DAY ${state.cycle}`,
     fivealive_turn: `TURN ${state.cycle}`,
     fivealive_bomb: "BOMB RESOLUTION",
+    fivealive_dealing: "DEALING",
     ek_turn: `TURN ${state.cycle}`,
     ek_defuse: "DEFUSE",
     ek_pick_discard: "PICK DISCARD",
     ek_steal: "STEAL",
+    ek_favor: "FAVOR",
+    ek_triple: "TRIPLE",
     spotit_play: "SPOT IT",
     ttt_play: "TIC-TAC-TOE",
     connect4_play: "CONNECT 4",
+    battleship_setup: "SETUP",
+    battleship_play: "BATTLESHIP",
     gameover: "DEBRIEF",
   };
 
   const { copy, copied } = useCopyToClipboard();
   const showMidGameSettings =
-    state.gameId === "mafia-city" &&
+    (state.gameId === "mafia-city" || state.gameId === "five-alive") &&
     state.you?.isHost &&
     onSettings &&
-    state.phase !== "lobby" &&
-    state.phase !== "gameover";
-  const canSkipTimer =
-    !!state.you?.isHost &&
-    !!onSkipTimer &&
-    !state.paused &&
-    !!state.phaseEndsAt &&
     state.phase !== "lobby" &&
     state.phase !== "gameover";
 
@@ -126,6 +126,16 @@ export function GameHud({
 
   const menuItemClass =
     "flex w-full items-center gap-2 rounded-sm border border-crimson/20 bg-manila px-3 py-2.5 text-left font-mono text-[10px] uppercase tracking-widest text-crimson transition hover:border-crimson/40 hover:bg-crimson/[0.04] disabled:opacity-50";
+
+  const showKnowGameToggle =
+    !!onKnowGameChange &&
+    state.gameId === "five-alive" &&
+    state.phase !== "lobby" &&
+    state.phase !== "gameover";
+
+  const knowGameToggleClass = knowGame
+    ? "border-crimson/60 bg-crimson/10 text-crimson"
+    : "border-crimson/20 text-crimson/70 hover:border-crimson/40 hover:text-crimson";
 
   return (
     <>
@@ -172,20 +182,20 @@ export function GameHud({
                   <MidGameSettings
                     settings={state.settings}
                     onUpdate={onSettings}
+                    gameId={state.gameId}
                   />
                 </div>
               )}
-              {canSkipTimer && (
+              {showKnowGameToggle && (
                 <button
                   type="button"
-                  onClick={() => {
-                    onSkipTimer?.();
-                    setMenuOpen(false);
-                  }}
+                  role="switch"
+                  aria-checked={knowGame}
+                  onClick={() => onKnowGameChange?.(!knowGame)}
                   className={menuItemClass}
                 >
-                  <SkipForward size={12} />
-                  Skip timer
+                  <BookOpen size={12} />
+                  {knowGame ? "Know game — on" : "Know game — off"}
                 </button>
               )}
               {showPause && (
@@ -245,17 +255,32 @@ export function GameHud({
           {phaseLabel[state.phase]}
         </div>
         {showMidGameSettings && (
-          <MidGameSettings settings={state.settings} onUpdate={onSettings} />
+          <MidGameSettings
+            settings={state.settings}
+            onUpdate={onSettings}
+            gameId={state.gameId}
+          />
         )}
-        {canSkipTimer && (
+        {showKnowGameToggle && (
           <button
             type="button"
-            onClick={onSkipTimer}
-            className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-crimson/40 px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-crimson"
-            title="Skip remaining timer"
+            role="switch"
+            aria-checked={knowGame}
+            aria-label={
+              knowGame
+                ? "I know this game — popups hidden"
+                : "I know this game — show popups"
+            }
+            title={
+              knowGame
+                ? "Popups hidden — game runs normally"
+                : "Hide phase result and action popups"
+            }
+            onClick={() => onKnowGameChange?.(!knowGame)}
+            className={`inline-flex shrink-0 items-center gap-1 rounded-sm border px-3 py-2 font-mono text-[10px] uppercase tracking-widest transition ${knowGameToggleClass}`}
           >
-            <SkipForward size={12} />
-            Skip timer
+            <BookOpen size={12} />
+            Know game
           </button>
         )}
         {showPause && (

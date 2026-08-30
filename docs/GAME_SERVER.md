@@ -4,8 +4,8 @@ SMOKEDOG production runs entirely on **Cloudflare Workers**:
 
 | Layer | Worker | URL |
 | --- | --- | --- |
-| **UI** | `smokedog` (OpenNext) | https://smokedog.balmeek544.workers.dev |
-| **Game server** | `smokedog-game` (Socket.io + Durable Objects) | https://smokedog-game.balmeek544.workers.dev |
+| **UI** | `sd` (OpenNext) | https://sd.smokedog.workers.dev |
+| **Game server** | `sd-game` (Socket.io + Durable Objects) | https://sd-game.smokedog.workers.dev |
 
 The UI connects via **`NEXT_PUBLIC_SOCKET_URL`**, set in `wrangler.jsonc` and embedded at build/deploy time.
 
@@ -26,7 +26,7 @@ npm run deploy:cf
 npm run deploy:cf:all
 ```
 
-After changing game logic in `src/server/*`, redeploy **`smokedog-game`**. After UI/client changes, redeploy **`smokedog`** (or both).
+After changing game logic in `src/server/*`, redeploy **`sd-game`**. After UI/client changes, redeploy **`sd`** (or both).
 
 ---
 
@@ -35,12 +35,12 @@ After changing game logic in `src/server/*`, redeploy **`smokedog-game`**. After
 **Game server:**
 
 ```bash
-curl https://smokedog-game.balmeek544.workers.dev/health
+curl https://sd-game.smokedog.workers.dev/health
 ```
 
 Expected: `{"ok":true,"service":"smokedog-game","host":"cloudflare"}`
 
-**UI:** open https://smokedog.balmeek544.workers.dev — hub should load and open lobbies should list.
+**UI:** open https://sd.smokedog.workers.dev — hub should load and open lobbies should list.
 
 ---
 
@@ -50,13 +50,11 @@ Expected: `{"ok":true,"service":"smokedog-game","host":"cloudflare"}`
 
 ```jsonc
 "vars": {
-  "NEXT_PUBLIC_SOCKET_URL": "https://smokedog-game.balmeek544.workers.dev"
+  "NEXT_PUBLIC_SOCKET_URL": "https://sd-game.smokedog.workers.dev"
 }
 ```
 
-Update the subdomain if you change your Cloudflare `workers.dev` account subdomain.
-
-### Game worker (`wrangler.game.jsonc`)
+Update the subdomain if you change your Cloudflare `workers.dev` account subdomain.### Game worker (`wrangler.game.jsonc`)
 
 Socket.io runs in Durable Objects (`EngineActor`, `SocketActor`). Entry: `workers/game/main.ts` → `wireGameSockets()`.
 

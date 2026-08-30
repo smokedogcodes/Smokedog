@@ -18,9 +18,10 @@ import {
 } from "@/lib/profile";
 import { getSocket } from "@/lib/socket/client";
 import { getGameModule } from "@/lib/games/registry";
+import { emitPageView } from "@/lib/analytics-beacon";
 import type { PublicGameState } from "@/lib/types";
 
-type HubPending = "create" | "join" | "spectate" | null;
+type HubPending = "create" | "join" | null;
 
 type GameCard = {
   id: string;
@@ -34,6 +35,42 @@ type GameCard = {
   disabled?: boolean;
   moreInfo?: boolean;
 };
+
+function resolveGameCard(card: GameCard): GameCard {
+  if (card.id === "mafia-city") return card;
+
+  try {
+    const mod = getGameModule(card.id);
+    if (mod.status === "maintenance") {
+      return {
+        ...card,
+        badge: "Under maintenance",
+        badgeTone: "amber",
+        disabled: true,
+      };
+    }
+    if (mod.status === "coming_soon") {
+      return {
+        ...card,
+        badge: "Coming soon",
+        badgeTone: "steel",
+        disabled: false,
+      };
+    }
+    if (mod.status === "live") {
+      return {
+        ...card,
+        badge: "Live",
+        badgeTone: undefined,
+        disabled: false,
+      };
+    }
+  } catch {
+    /* registry will validate on create */
+  }
+
+  return card;
+}
 
 const GAME_CARDS: GameCard[] = [
   {
@@ -83,21 +120,17 @@ const GAME_CARDS: GameCard[] = [
     players: "2–6 Players",
     duration: "Turn-based",
     image: "/games/five-alive.jpg",
-    badge: "Under maintenance",
-    badgeTone: "amber",
-    disabled: true,
+    badge: "Live",
     moreInfo: true,
   },
   {
-    id: "detonation-cats",
-    title: "Detonation Cats",
-    pitch: "Draw carefully. Defuse the boom. Last player standing wins.",
+    id: "exploding-kittens",
+    title: "Exploding Kittens",
+    pitch: "Draw carefully. Defuse the kitten. Last player standing wins.",
     players: "2–5 Players",
     duration: "Turn-based",
-    image: "/games/five-alive.jpg",
-    badge: "Coming soon",
-    badgeTone: "steel",
-    disabled: false,
+    image: "/games/exploding-kittens.jpg",
+    badge: "Live",
     moreInfo: true,
   },
 ];
@@ -106,6 +139,7 @@ export default function HomePage() {
   const router = useRouter();
   const [modal, setModal] = useState(false);
   const [modalMode, setModalMode] = useState<"create" | "join">("create");
+  const [profileOnly, setProfileOnly] = useState(false);
   const [prefillCode, setPrefillCode] = useState("");
   const [createGameId, setCreateGameId] = useState<string>("mafia-city");
   const createGameIdRef = useRef<string>("mafia-city");
@@ -114,15 +148,42 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<HubPending>(null);
   const pendingRef = useRef<HubPending>(null);
-  const spectateNavRef = useRef(false);
+  const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [joiningCode, setJoiningCode] = useState<string | null>(null);
-  const [spectatingCode, setSpectatingCode] = useState<string | null>(null);
-  const [needProfileMode, setNeedProfileMode] = useState<"join" | "spectate">("join");
   const [rulesGameId, setRulesGameId] = useState<string | null>(null);
+
+  useEffect(() => {
+    emitPageView({ path: "/", onceKey: "hub" });
+  }, []);
 
   const setHubPending = (next: HubPending) => {
     pendingRef.current = next;
     setPending(next);
+    if (pendingTimerRef.current) {
+      clearTimeout(pendingTimerRef.current);
+      pendingTimerRef.current = null;
+    }
+  };
+
+  const clearHubPending = () => {
+    if (pendingTimerRef.current) {
+      clearTimeout(pendingTimerRef.current);
+      pendingTimerRef.current = null;
+    }
+    pendingRef.current = null;
+    setPending(null);
+  };
+
+  const beginHubPending = (next: HubPending) => {
+    setHubPending(next);
+    pendingTimerRef.current = setTimeout(() => {
+      if (!pendingRef.current) return;
+      clearHubPending();
+      setJoiningCode(null);
+      setError(
+        "Game server timed out. Check your connection and try again."
+      );
+    }, 20_000);
   };
 
   const setPendingGameId = (gameId: string) => {
@@ -130,19 +191,24 @@ export default function HomePage() {
     setCreateGameId(gameId);
   };
 
-  useEffect(() => {
-    setProfile(loadProfile());
-    const p = loadProfile();
-    if (!p) return;
-    const socket = getSocket(p.playerId);
+  const hubBoundRef = useRef(false);
+
+  const bindHubSocket = (playerId: string) => {
+    const socket = getSocket(playerId);
+    if (hubBoundRef.current) return socket;
 
     const onError = ({ message }: { message: string }) => {
       if (!pendingRef.current) return;
-      setHubPending(null);
+      clearHubPending();
       setJoiningCode(null);
-      setSpectatingCode(null);
-      spectateNavRef.current = false;
       setError(message);
+    };
+
+    const onConnectError = (err: Error) => {
+      if (!pendingRef.current) return;
+      clearHubPending();
+      setJoiningCode(null);
+      setError(`Could not reach game server: ${err.message}`);
     };
 
     const onState = (state: PublicGameState) => {
@@ -151,7 +217,7 @@ export default function HomePage() {
       if (mode === "create") {
         const requested = createGameIdRef.current;
         if (requested && state.gameId !== requested) {
-          setHubPending(null);
+          clearHubPending();
           setJoiningCode(null);
           setError(
             `Server started ${state.gameId} instead of ${requested}. The game server may need a redeploy — try again in a minute.`
@@ -160,20 +226,29 @@ export default function HomePage() {
         }
       }
       setError(null);
-      setHubPending(null);
+      clearHubPending();
       setJoiningCode(null);
-      setSpectatingCode(null);
-      const suffix = spectateNavRef.current ? "?spectate=1" : "";
-      spectateNavRef.current = false;
-      router.push(`/room/${state.roomId}${suffix}`);
+      router.push(`/room/${state.roomId}`);
     };
 
     socket.on("room:error", onError);
+    socket.on("connect_error", onConnectError);
     socket.on("room:state", onState);
+    hubBoundRef.current = true;
+    return socket;
+  };
+
+  useEffect(() => {
+    setProfile(loadProfile());
+    const p = loadProfile();
+    if (p) bindHubSocket(p.playerId);
     return () => {
-      socket.off("room:error", onError);
-      socket.off("room:state", onState);
+      if (pendingTimerRef.current) {
+        clearTimeout(pendingTimerRef.current);
+        pendingTimerRef.current = null;
+      }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
 
   const persist = (name: string, avatarId: number) => {
@@ -181,6 +256,7 @@ export default function HomePage() {
     const next = { playerId, name, avatarId };
     saveProfile(next);
     setProfile(next);
+    bindHubSocket(playerId);
     return next;
   };
 
@@ -202,12 +278,11 @@ export default function HomePage() {
       /* server will validate */
     }
     setError(null);
-    setHubPending("create");
+    beginHubPending("create");
     setJoiningCode(null);
-    setSpectatingCode(null);
-    spectateNavRef.current = false;
     const p = persist(name, avatarId);
-    emitHub(p.playerId).emit("room:create", {
+    const socket = emitHub(p.playerId);
+    const payload = {
       playerId: p.playerId,
       name: p.name,
       avatarId: p.avatarId,
@@ -216,39 +291,28 @@ export default function HomePage() {
         createGameIdRef.current === "mafia-city"
           ? !!opts?.localMode
           : undefined,
-    });
+    };
+    const send = () => socket.emit("room:create", payload);
+    if (socket.connected) send();
+    else socket.once("connect", send);
   };
 
   const onJoin = (name: string, avatarId: number, code: string) => {
     if (pending) return;
     setError(null);
-    setHubPending("join");
+    beginHubPending("join");
     setJoiningCode(code);
-    setSpectatingCode(null);
-    spectateNavRef.current = false;
     const p = persist(name, avatarId);
-    emitHub(p.playerId).emit("room:join", {
+    const socket = emitHub(p.playerId);
+    const payload = {
       roomId: code,
       playerId: p.playerId,
       name: p.name,
       avatarId: p.avatarId,
-    });
-  };
-
-  const onSpectate = (name: string, avatarId: number, code: string) => {
-    if (pending) return;
-    setError(null);
-    setHubPending("spectate");
-    setSpectatingCode(code);
-    setJoiningCode(null);
-    spectateNavRef.current = true;
-    const p = persist(name, avatarId);
-    emitHub(p.playerId).emit("room:spectate", {
-      roomId: code,
-      playerId: p.playerId,
-      name: p.name,
-      avatarId: p.avatarId,
-    });
+    };
+    const send = () => socket.emit("room:join", payload);
+    if (socket.connected) send();
+    else socket.once("connect", send);
   };
 
   const joinWithProfile = (code: string) => {
@@ -261,18 +325,6 @@ export default function HomePage() {
       return;
     }
     onJoin(p.name, p.avatarId, code);
-  };
-
-  const spectateWithProfile = (code: string) => {
-    if (pending) return;
-    const p = loadProfile();
-    if (!p?.name) {
-      setPrefillCode(code);
-      setModalMode("join");
-      setModal(true);
-      return;
-    }
-    onSpectate(p.name, p.avatarId, code);
   };
 
   const openCreate = (gameId: string) => {
@@ -289,6 +341,7 @@ export default function HomePage() {
     setError(null);
     setPendingGameId(gameId);
     setPrefillCode("");
+    setProfileOnly(false);
     setModalMode("create");
     setModal(true);
   };
@@ -296,7 +349,16 @@ export default function HomePage() {
   return (
     <div className="relative min-h-screen overflow-hidden bg-manila">
       <div className="pointer-events-none absolute inset-0 animate-pulse-slow bg-[radial-gradient(ellipse_at_top,rgba(139,30,30,0.12),transparent_55%)]" />
-      <SiteHeader avatarId={profile?.avatarId ?? guestAvatarId} />
+      <SiteHeader
+        avatarId={profile?.avatarId ?? guestAvatarId}
+        onAvatarClick={() => {
+          setProfileOnly(true);
+          setPrefillCode("");
+          setPendingGameId("");
+          setModalMode("create");
+          setModal(true);
+        }}
+      />
 
       <motion.main
         variants={stagger}
@@ -306,16 +368,12 @@ export default function HomePage() {
       >
         <OpenLobbies
           onJoin={joinWithProfile}
-          onSpectate={spectateWithProfile}
           joiningCode={joiningCode}
           joinPending={pending === "join"}
-          spectatingCode={spectatingCode}
-          spectatePending={pending === "spectate"}
-          onNeedProfile={(code, mode = "join") => {
+          onNeedProfile={(code) => {
             if (pending) return;
             setError(null);
             setPrefillCode(code ?? "");
-            setNeedProfileMode(mode);
             setModalMode("join");
             setModal(true);
           }}
@@ -331,7 +389,9 @@ export default function HomePage() {
         </motion.div>
 
         <div className="mt-8 grid gap-6 md:grid-cols-2">
-          {GAME_CARDS.map((card) => (
+          {GAME_CARDS.map((raw) => {
+            const card = resolveGameCard(raw);
+            return (
             <div key={card.id} className="relative">
               <motion.button
                 variants={fadeUp}
@@ -397,7 +457,8 @@ export default function HomePage() {
                   More info
                 </button>
               )}            </div>
-          ))}
+            );
+          })}
         </div>
       </motion.main>
       <GameRulesModal
@@ -410,38 +471,33 @@ export default function HomePage() {
         open={modal}
         defaultName={profile?.name ?? ""}
         defaultAvatar={profile?.avatarId ?? guestAvatarId}
-        createGameId={createGameId}
+        createGameId={profileOnly ? undefined : createGameId}
         error={error}
         initialCode={prefillCode}
         initialMode={modalMode}
         pending={pending}
+        profileOnly={profileOnly}
         onClose={() => {
           setModal(false);
+          setProfileOnly(false);
           setError(null);
           setHubPending(null);
           setJoiningCode(null);
-          setSpectatingCode(null);
-          spectateNavRef.current = false;
+        }}
+        onSaveProfile={(name, avatarId) => {
+          persist(name, avatarId);
+          setModal(false);
+          setProfileOnly(false);
         }}
         onCreate={onCreate}
-        onJoin={(name, avatarId, code) => {
-          if (needProfileMode === "spectate") {
-            onSpectate(name, avatarId, code);
-          } else {
-            onJoin(name, avatarId, code);
-          }
-        }}
+        onJoin={onJoin}
       />
 
       {pending && !modal && (
         <div className="fixed inset-x-0 bottom-6 z-40 flex justify-center px-4">
           <div className="inline-flex items-center gap-2 rounded-sm border border-crimson/20 bg-surface/95 px-4 py-3 font-mono text-[10px] uppercase tracking-widest text-ink shadow-lg backdrop-blur-md">
             <LoadingSpinner size={14} />
-            {pending === "create"
-              ? "Creating party…"
-              : pending === "spectate"
-                ? "Opening spectator view…"
-                : "Joining party…"}
+            {pending === "create" ? "Creating party…" : "Joining party…"}
           </div>
         </div>
       )}

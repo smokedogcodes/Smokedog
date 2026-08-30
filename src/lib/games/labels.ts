@@ -4,8 +4,9 @@ export function gameLabel(gameId: string): string {
   switch (gameId) {
     case "five-alive":
       return "5 Alive";
+    case "exploding-kittens":
     case "detonation-cats":
-      return "Detonation Cats";
+      return "Exploding Kittens";
     case "mafia-city":
       return "Mafia City";
     case "spot-it":
@@ -14,6 +15,8 @@ export function gameLabel(gameId: string): string {
       return "Tic-Tac-Toe";
     case "connect-4":
       return "Connect 4";
+    case "battleship":
+      return "Tactical Battleship";
     default:
       return gameId;
   }

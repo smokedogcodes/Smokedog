@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from "react";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
 
 /** Dossier panel — manila field, crimson ink only. */
@@ -6,11 +6,13 @@ export function GlassPanel({
   children,
   className = "",
   onClick,
+  style,
   variant = "desk",
 }: {
   children: ReactNode;
   className?: string;
   onClick?: () => void;
+  style?: CSSProperties;
   variant?: "desk" | "paper";
 }) {
   const surface =
@@ -23,6 +25,7 @@ export function GlassPanel({
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
       onClick={onClick}
+      style={style}
       onKeyDown={
         onClick
           ? (e) => {
