@@ -239,7 +239,7 @@ export interface PublicGameState {
   spotIt?: SpotItPublicState;
   ttt?: TttPublicState;
   connect4?: Connect4PublicState;
-  battleship?: BattleshipPublicState;
+  battleship?: import("@/lib/games/battleship/selectors").BattleshipPublicState;
   boardWinnerId?: string | null;
   boardDraw?: boolean;
   /** External observer — not seated as a player. */

@@ -275,11 +275,15 @@ export function triggerPowerUp(
     const shots = { ...(next.shotsByAttacker[attackerId] ?? {}) };
     for (const c of cells) {
       const k = coordKey(c.col, c.row);
-      if (!shots[k] || shots[k] === "revealed_empty" || shots[k] === "revealed_ship") {
-        if (shots[k] !== "hit" && shots[k] !== "miss" && shots[k] !== "obscured") {
-          shots[k] = c.hasShip ? "revealed_ship" : "revealed_empty";
-        }
+      const existing = shots[k];
+      if (
+        existing === "hit" ||
+        existing === "miss" ||
+        existing === "obscured"
+      ) {
+        continue;
       }
+      shots[k] = c.hasShip ? "revealed_ship" : "revealed_empty";
     }
     next = {
       ...next,

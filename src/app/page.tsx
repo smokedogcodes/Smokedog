@@ -114,6 +114,16 @@ const GAME_CARDS: GameCard[] = [
     moreInfo: true,
   },
   {
+    id: "battleship",
+    title: "Tactical Battleship",
+    pitch: "Place your fleet. Earn AP. Unleash sonar, cluster, torpedo, smoke, and recon.",
+    players: "2 Players",
+    duration: "Turn-based",
+    image: "/games/battleship.jpg",
+    badge: "Live",
+    moreInfo: true,
+  },
+  {
     id: "five-alive",
     title: "5 Alive",
     pitch: "Keep it under 21. Busts cost lives. Bombs demand instant 0s.",

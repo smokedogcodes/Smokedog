@@ -208,11 +208,6 @@ export function BattleshipTable({
                   </button>
                 </>
               )}
-          {power === "smoke" ? (
-            <p className="text-xs text-violet-300">
-              Tap your fleet to deploy smoke.
-            </p>
-          ) : null}
         </div>
       )}
       {power === "smoke" ? (
@@ -229,7 +224,7 @@ export function BattleshipTable({
             Your ships
           </p>
           <ul className="mt-2 space-y-1 text-xs text-cyan-100">
-            {bs.yourShips.map((s) => (
+            {bs.yourShips.map((s: (typeof bs.yourShips)[number]) => (
               <li key={s.type} className={s.sunk ? "line-through opacity-50" : ""}>
                 {s.type} {s.hits}/{s.length}
               </li>
@@ -241,7 +236,7 @@ export function BattleshipTable({
             Enemy ships
           </p>
           <ul className="mt-2 space-y-1 text-xs text-cyan-100">
-            {bs.opponentShips.map((s) => (
+            {bs.opponentShips.map((s: (typeof bs.opponentShips)[number]) => (
               <li key={s.type} className={s.sunk ? "text-amber-400" : ""}>
                 {s.type} {s.sunk ? "SUNK" : `${s.hits}/${s.length}`}
               </li>

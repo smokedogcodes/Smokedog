@@ -94,17 +94,6 @@ import {
   type SpotItRoomState,
   type TttRoomState,
 } from "@/server/board-game-state";
-
-/** Games where voice is intentionally disabled (text chat may still work). */
-function isChatOnlyGame(gameId: string): boolean {
-  return (
-    gameId === "exploding-kittens" ||
-    gameId === "detonation-cats" ||
-    gameId === "spot-it" ||
-    gameId === "connect-4" ||
-    gameId === "battleship"
-  );
-}
 import {
   botBattleshipDelayMs,
   applyBotBattleAction,
@@ -206,6 +195,17 @@ import {
   isNumber0,
   shuffle,
 } from "@/lib/games/5-alive/cards";
+
+/** Games where voice is intentionally disabled (text chat may still work). */
+function isChatOnlyGame(gameId: string): boolean {
+  return (
+    gameId === "exploding-kittens" ||
+    gameId === "detonation-cats" ||
+    gameId === "spot-it" ||
+    gameId === "connect-4" ||
+    gameId === "battleship"
+  );
+}
 
 export type IoServer = Server<ClientToServerEvents, ServerToClientEvents>;
 

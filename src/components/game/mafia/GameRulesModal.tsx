@@ -102,6 +102,23 @@ const RULES_BY_GAME: Record<string, GameRules> = {
       },
     ],
   },
+  battleship: {
+    title: "Tactical Battleship — how it works",
+    sections: [
+      {
+        title: "Fleet placement",
+        body: "Each player secretly places five ships (Carrier 5 through Destroyer 2) on a 10×10 grid. Randomize or place by hand, then lock in.",
+      },
+      {
+        title: "Combat & AP",
+        body: "Take turns striking. Misses award 1 AP, hits 2, sinks 3. Spend AP on Sonar (scan), Cluster (+), Torpedo (row/col until hit), Smoke (hide 3×3 for 2 turns), or Recon (reveal a line).",
+      },
+      {
+        title: "Winning",
+        body: "Sink every enemy ship cell to win. Host can rematch from the debrief without leaving the room.",
+      },
+    ],
+  },
   "five-alive": {
     title: "5 Alive — how it works",
     sections: [
