@@ -57,7 +57,10 @@ export function BattleshipGameOver({
       ? Math.round((stats.hits / stats.shotsFired) * 100)
       : 0;
   const powerUsed = stats
-    ? Object.values(stats.powerUpsUsed).reduce((a, b) => a + b, 0)
+    ? Object.values(stats.powerUpsUsed).reduce(
+        (a: number, b: number) => a + b,
+        0
+      )
     : 0;
 
   return (
