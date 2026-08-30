@@ -51,6 +51,7 @@ import { SpotItTable } from "@/components/game/spot-it/SpotItTable";
 import { BoardLobbyView } from "@/components/game/board/BoardLobbyView";
 import { TttBoard } from "@/components/game/tic-tac-toe/TttBoard";
 import { Connect4Board } from "@/components/game/connect-4/Connect4Board";
+import { BattleshipTable } from "@/components/game/battleship/BattleshipTable";
 import { SpectatorBanner } from "@/components/game/mafia/SpectatorBanner";
 
 export function GameClient({
@@ -779,7 +780,18 @@ export function GameClient({
               canVoteDead={state.you.role === "villager"}
             />
           )}
-        {state.phase === "gameover" ? (
+        {state.phase === "gameover" && state.gameId === "battleship" ? (
+          <BattleshipTable
+            state={state}
+            socket={socket}
+            returning={returningToLobby}
+            onReturn={() => {
+              if (returningToLobby) return;
+              setReturningToLobby(true);
+              socket.emit("lobby:return", { roomId: state.roomId });
+            }}
+          />
+        ) : state.phase === "gameover" ? (
           <GameOverScreen
             state={state}
             returning={returningToLobby}
@@ -855,6 +867,18 @@ export function GameClient({
                     state={state}
                     title="Connect 4"
                     blurb="Drop discs. Connect four to win."
+                    onStart={emitStart}
+                    starting={startingGame}
+                    onKick={emitKick}
+                    onAddBot={emitAddBot}
+                    onRemoveBot={emitRemoveBot}
+                    onSettings={emitSettings}
+                  />
+                ) : state.gameId === "battleship" ? (
+                  <BoardLobbyView
+                    state={state}
+                    title="Tactical Battleship"
+                    blurb="Place your fleet. Spend AP on sonar, cluster, torpedo, smoke, and recon."
                     onStart={emitStart}
                     starting={startingGame}
                     onKick={emitKick}
@@ -944,6 +968,13 @@ export function GameClient({
                   socket.emit("connect4:drop", { roomId: state.roomId, column })
                 }
               />
+            )}
+
+            {!state.spectatorMode &&
+              state.gameId === "battleship" &&
+              (state.phase === "battleship_setup" ||
+                state.phase === "battleship_play") && (
+              <BattleshipTable state={state} socket={socket} />
             )}
 
             {!state.spectatorMode && state.phase === "reveal" && (
