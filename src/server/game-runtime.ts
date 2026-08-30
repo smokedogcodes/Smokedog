@@ -201,7 +201,6 @@ function isChatOnlyGame(gameId: string): boolean {
   return (
     gameId === "exploding-kittens" ||
     gameId === "detonation-cats" ||
-    gameId === "spot-it" ||
     gameId === "connect-4" ||
     gameId === "battleship"
   );

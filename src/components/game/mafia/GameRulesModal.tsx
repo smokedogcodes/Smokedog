@@ -59,8 +59,8 @@ const RULES_BY_GAME: Record<string, GameRules> = {
         body: "Keep stacking wins. The tallest tower at the end of the deck wins the match.",
       },
       {
-        title: "Chat",
-        body: "Chat stays open for table talk. No voice channel in Spot It — speed is the whole game.",
+        title: "Comms",
+        body: "Public chat and voice stay open for the whole match so you can talk while you race.",
       },
     ],
   },

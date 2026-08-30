@@ -12,11 +12,17 @@ export function SpotItTable({
   socket,
   onMatch,
   onSendChat,
+  enableVoice = true,
+  joinVoiceRequest,
+  onVoiceJoined,
 }: {
   state: PublicGameState;
   socket: GameSocket | null;
   onMatch: (symbolId: number) => void;
   onSendChat: (channel: ChatChannel, text: string) => void;
+  enableVoice?: boolean;
+  joinVoiceRequest?: { nonce: number; channel: ChatChannel } | null;
+  onVoiceJoined?: (channel: ChatChannel) => void;
 }) {
   const spot = state.spotIt;
   const [flash, setFlash] = useState<number | null>(null);
@@ -114,7 +120,9 @@ export function SpotItTable({
         state={state}
         socket={socket}
         onSend={onSendChat}
-        enableVoice={false}
+        enableVoice={enableVoice}
+        joinVoiceRequest={joinVoiceRequest}
+        onVoiceJoined={onVoiceJoined}
       />
     </div>
   );

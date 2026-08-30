@@ -556,6 +556,13 @@ export function GameClient({
     ) {
       return "town" as ChatChannel;
     }
+    if (
+      state.gameId === "spot-it" &&
+      state.phase === "spotit_play" &&
+      state.you.alive
+    ) {
+      return "town" as ChatChannel;
+    }
     return undefined;
   })();
 
@@ -940,6 +947,9 @@ export function GameClient({
                   })
                 }
                 onSendChat={emitChat}
+                enableVoice={townVoiceOpen}
+                joinVoiceRequest={joinVoiceRequest}
+                onVoiceJoined={clearVoiceInviteForChannel}
               />
             )}
 
