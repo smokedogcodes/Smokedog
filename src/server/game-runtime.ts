@@ -2410,7 +2410,8 @@ export class GameRuntime {
     if (!room || room.paused || !this.isEkGame(room.gameId)) return;
     if (room.phase !== "ek_turn") return;
     const ek = room.explodingKittens;
-    if (!ek || ek.turnPlayerId !== playerId || ek.subPhase !== "draw") return;
+    if (!ek || ek.turnPlayerId !== playerId) return;
+    if (ek.subPhase !== "draw" && ek.subPhase !== "play") return;
     if (ek.nopeWindowEndsAt) return;
 
     const result = ekDraw(ek, this.ekPlayerRefs(room), playerId);

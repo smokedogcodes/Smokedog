@@ -141,56 +141,85 @@ export function BattleshipTable({
         ))}
       </div>
 
-      {(power === "torpedo" || power === "recon") && (
-        <div className="flex flex-wrap gap-1.5">
-          {power === "torpedo"
-            ? (["N", "S", "E", "W"] as TorpedoDirection[]).map((d) => (
+      {power && (
+        <div className="rounded border border-amber-400/50 bg-amber-950/40 p-2.5 sm:p-3 text-amber-100 shadow-md flex flex-wrap items-center justify-between gap-2">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-xs font-bold uppercase tracking-wider text-amber-300">
+                Active Tactical: {bs.powerUps.find((p) => p.type === power)?.label}
+              </span>
+              <span className="rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[9px] text-amber-200">
+                {bs.powerUps.find((p) => p.type === power)?.cost} AP
+              </span>
+            </div>
+            <p className="text-[11px] text-amber-200/90">
+              {power === "smoke"
+                ? "Tap a cell in Your Fleet (Fleet tab on mobile) to place 3x3 smoke cover."
+                : power === "torpedo"
+                  ? "Select direction below and tap any edge cell on Radar to launch."
+                  : power === "recon"
+                    ? "Select scan orientation and tap row/col on Radar to detect ships."
+                    : "Tap any cell on Radar to execute strike."}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {power === "torpedo" && (
+              <div className="flex gap-1">
+                {(["N", "S", "E", "W"] as TorpedoDirection[]).map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setTorpedoDir(d)}
+                    className={`rounded border px-2 py-0.5 font-mono text-[9px] uppercase font-bold ${
+                      torpedoDir === d
+                        ? "border-amber-300 bg-amber-400 text-slate-950 shadow"
+                        : "border-amber-500/40 text-amber-200 hover:bg-amber-900/40"
+                    }`}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {power === "recon" && (
+              <div className="flex gap-1">
                 <button
-                  key={d}
                   type="button"
-                  onClick={() => setTorpedoDir(d)}
-                  className={`rounded-sm border px-2.5 py-1 font-mono text-[9px] ${
-                    torpedoDir === d
-                      ? "border-amber-400 bg-amber-500/20 text-amber-100"
-                      : "border-cyan-800 text-cyan-300"
+                  onClick={() => setReconOrient("horizontal")}
+                  className={`rounded border px-2 py-0.5 font-mono text-[9px] font-bold ${
+                    reconOrient === "horizontal"
+                      ? "border-amber-300 bg-amber-400 text-slate-950 shadow"
+                      : "border-amber-500/40 text-amber-200 hover:bg-amber-900/40"
                   }`}
                 >
-                  Torpedo {d}
+                  Row ↔
                 </button>
-              ))
-            : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setReconOrient("horizontal")}
-                    className={`rounded-sm border px-2.5 py-1 font-mono text-[9px] ${
-                      reconOrient === "horizontal"
-                        ? "border-amber-400 bg-amber-500/20"
-                        : "border-cyan-800 text-cyan-300"
-                    }`}
-                  >
-                    Recon row
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setReconOrient("vertical")}
-                    className={`rounded-sm border px-2.5 py-1 font-mono text-[9px] ${
-                      reconOrient === "vertical"
-                        ? "border-amber-400 bg-amber-500/20"
-                        : "border-cyan-800 text-cyan-300"
-                    }`}
-                  >
-                    Recon column
-                  </button>
-                </>
-              )}
+                <button
+                  type="button"
+                  onClick={() => setReconOrient("vertical")}
+                  className={`rounded border px-2 py-0.5 font-mono text-[9px] font-bold ${
+                    reconOrient === "vertical"
+                      ? "border-amber-300 bg-amber-400 text-slate-950 shadow"
+                      : "border-amber-500/40 text-amber-200 hover:bg-amber-900/40"
+                  }`}
+                >
+                  Col ↕
+                </button>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setPower(null)}
+              className="rounded border border-red-500/40 bg-red-950/40 px-2.5 py-1 font-mono text-[10px] uppercase text-red-200 hover:bg-red-900/60 transition"
+            >
+              Cancel Strike
+            </button>
+          </div>
         </div>
       )}
-      {power === "smoke" ? (
-        <p className="text-[11px] text-violet-300">
-          Smoke selected — switch to Fleet and tap a center cell.
-        </p>
-      ) : null}
 
       <div className="grid justify-items-center gap-3 md:grid-cols-2 md:items-start">
         <div className={mobileTab === "target" ? "block" : "hidden md:block"}>

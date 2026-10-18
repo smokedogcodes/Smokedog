@@ -186,13 +186,34 @@ export function projectBattleshipPublic(
             smoke: oppSmokeKeys.has(k),
           };
         } else {
-          // Sunk ships: outline cells as hit (already in shots) — expose sunk ship type via yourShips opponent list
-          radarGrid[row]![col] = {
-            col,
-            row,
-            mark,
-            smoke: oppSmokeKeys.has(k),
-          };
+          const sunkShip = oppFleet.find(
+            (s) => s.sunk && s.cells.some((c) => c.col === col && c.row === row)
+          );
+          if (sunkShip) {
+            const seg = sunkShip.cells.findIndex((c) => c.col === col && c.row === row);
+            const orientation =
+              sunkShip.cells.length > 1 && sunkShip.cells[1]!.col === sunkShip.cells[0]!.col
+                ? ("vertical" as const)
+                : ("horizontal" as const);
+            radarGrid[row]![col] = {
+              col,
+              row,
+              mark,
+              ship: sunkShip.type,
+              hitOnShip: true,
+              shipIndex: seg >= 0 ? seg : undefined,
+              shipLength: sunkShip.cells.length,
+              shipOrientation: orientation,
+              smoke: oppSmokeKeys.has(k),
+            };
+          } else {
+            radarGrid[row]![col] = {
+              col,
+              row,
+              mark,
+              smoke: oppSmokeKeys.has(k),
+            };
+          }
         }
       }
     }

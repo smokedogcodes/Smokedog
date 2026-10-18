@@ -17,8 +17,11 @@ export function BattleshipGrid({
   cells,
   interactive,
   onCellClick,
+  onCellHover,
+  onCellLeave,
   selected,
   preview,
+  placementPreview,
   title,
   compact,
   ships: shipsProp,
@@ -26,14 +29,20 @@ export function BattleshipGrid({
   cells: PublicGridCell[][];
   interactive?: boolean;
   onCellClick?: (col: number, row: number) => void;
+  onCellHover?: (col: number, row: number) => void;
+  onCellLeave?: () => void;
   selected?: { col: number; row: number } | null;
   preview?: { col: number; row: number }[];
+  placementPreview?: { cells: { col: number; row: number }[]; valid: boolean } | null;
   title: string;
   compact?: boolean;
   ships?: GridShipSprite[];
 }) {
   const previewSet = new Set(
     (preview ?? []).map((c) => `${c.col},${c.row}`)
+  );
+  const placementSet = new Set(
+    (placementPreview?.cells ?? []).map((c) => `${c.col},${c.row}`)
   );
   const ships = shipsProp ?? shipsFromCells(cells);
 
@@ -50,7 +59,10 @@ export function BattleshipGrid({
         {title}
       </p>
 
-      <div className="relative rounded-sm border border-cyan-500/40 bg-[#071a33] p-0.5 sm:p-1">
+      <div
+        className="relative rounded-sm border border-cyan-500/40 bg-[#071a33] p-0.5 sm:p-1"
+        onMouseLeave={onCellLeave}
+      >
         <div
           className="relative z-0 grid gap-px"
           style={{
@@ -76,6 +88,7 @@ export function BattleshipGrid({
                 const isSel =
                   selected?.col === cell.col && selected?.row === cell.row;
                 const isPrev = previewSet.has(key);
+                const isPlacement = placementSet.has(key);
                 const isHit = cell.mark === "hit" || !!cell.hitOnShip;
                 const isMiss = cell.mark === "miss";
 
@@ -85,24 +98,37 @@ export function BattleshipGrid({
                     type="button"
                     disabled={!interactive}
                     onClick={() => onCellClick?.(cell.col, cell.row)}
+                    onMouseEnter={() => onCellHover?.(cell.col, cell.row)}
                     className={cn(
-                      "relative aspect-square rounded-[1px] border border-cyan-400/20 bg-[#0a2748] transition",
+                      "group relative aspect-square rounded-[1px] border border-cyan-400/20 bg-[#0a2748] transition",
                       interactive &&
-                        "cursor-pointer hover:border-cyan-300 hover:bg-cyan-400/15",
+                        "cursor-pointer hover:border-cyan-300 hover:bg-cyan-400/20",
                       !interactive && "cursor-default",
                       cell.mark === "obscured" && "bg-violet-800/50",
                       cell.mark === "revealed_ship" && "bg-emerald-800/40",
                       cell.mark === "revealed_empty" && "bg-slate-800/40",
                       cell.smoke && "ring-1 ring-violet-400/50",
                       isSel && "ring-2 ring-amber-300",
-                      isPrev && "bg-cyan-400/25"
+                      isPrev && "bg-cyan-400/25",
+                      isPlacement &&
+                        (placementPreview?.valid
+                          ? "bg-emerald-500/45 ring-1 ring-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)] z-10"
+                          : "bg-red-500/50 ring-1 ring-red-400 shadow-[0_0_8px_rgba(248,113,113,0.6)] z-10")
                     )}
                   >
+                    {/* Targeting reticle on interactive hover */}
+                    {interactive && !isHit && !isMiss && (
+                      <div className="pointer-events-none absolute inset-0 hidden items-center justify-center group-hover:flex z-10">
+                        <div className="h-full w-[1px] bg-cyan-300/80" />
+                        <div className="absolute h-[1px] w-full bg-cyan-300/80" />
+                        <div className="absolute h-2 w-2 rounded-full border border-cyan-200/90" />
+                      </div>
+                    )}
                     {isMiss ? (
                       <BattleshipMissMarker className="pointer-events-none absolute inset-[8%] z-[3]" />
                     ) : null}
                     {isHit ? (
-                      <BattleshipHitMarker className="pointer-events-none absolute inset-[6%] z-[3]" />
+                      <BattleshipHitMarker className="pointer-events-none absolute inset-[6%] z-[3] drop-shadow-[0_0_6px_rgba(239,68,68,0.7)]" />
                     ) : null}
                   </button>
                 );

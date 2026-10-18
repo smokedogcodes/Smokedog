@@ -15,7 +15,7 @@ export type PlacedShip = {
 
 export type FleetPlacement = PlacedShip[];
 
-function cellsForShip(
+export function cellsForShip(
   type: ShipType,
   origin: Coord,
   orientation: Orientation

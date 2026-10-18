@@ -39,6 +39,143 @@ function canSelectTogether(
   return false;
 }
 
+function describeSelection(
+  hand: PublicEkCard[],
+  selectedIds: string[]
+): {
+  valid: boolean;
+  label: string;
+  description: string;
+} {
+  if (selectedIds.length === 0) {
+    return {
+      valid: false,
+      label: "No cards selected",
+      description: "Select an action card, a pair, 3-of-a-kind, or 5 cards to play.",
+    };
+  }
+  const selected = hand.filter((c) => selectedIds.includes(c.id));
+  if (selected.length === 1) {
+    const card = selected[0]!;
+    switch (card.type) {
+      case "skip":
+        return {
+          valid: true,
+          label: "Skip",
+          description: "End your turn immediately without drawing a card.",
+        };
+      case "attack":
+        return {
+          valid: true,
+          label: "Attack (2x)",
+          description:
+            "End your turn without drawing; next player must take 2 turns in a row.",
+        };
+      case "see_future":
+        return {
+          valid: true,
+          label: "See the Future",
+          description: "Privately view the top 3 cards in the draw pile.",
+        };
+      case "shuffle":
+        return {
+          valid: true,
+          label: "Shuffle",
+          description: "Randomly shuffle the draw pile.",
+        };
+      case "favor":
+        return {
+          valid: true,
+          label: "Favor",
+          description: "Force any player to give you 1 card of their choice.",
+        };
+      case "nope":
+        return {
+          valid: false,
+          label: "Nope",
+          description:
+            "Can only be played during an active Nope window to cancel an action.",
+        };
+      case "defuse":
+        return {
+          valid: false,
+          label: "Defuse",
+          description:
+            "Kept in hand automatically to defuse an Exploding Kitten if drawn.",
+        };
+      case "exploding_kitten":
+        return {
+          valid: false,
+          label: "Exploding Kitten",
+          description: "Cannot be played! Drawing one requires a Defuse card.",
+        };
+      default:
+        return {
+          valid: false,
+          label: "Cat Card",
+          description:
+            "Cat cards have no effect alone. Match 2, 3, or 5 cards for special combos!",
+        };
+    }
+  }
+  if (selected.length === 2) {
+    const allSameCat = selected.every(
+      (c) => isCatType(c.type) && c.type === selected[0]!.type
+    );
+    if (allSameCat) {
+      return {
+        valid: true,
+        label: "Two-of-a-Kind (Pair)",
+        description: "Steal a random card from another player.",
+      };
+    }
+    return {
+      valid: false,
+      label: "Invalid Pair",
+      description: "Pairs must be 2 matching cat cards of the same type.",
+    };
+  }
+  if (selected.length === 3) {
+    const allSameCat = selected.every(
+      (c) => isCatType(c.type) && c.type === selected[0]!.type
+    );
+    if (allSameCat) {
+      return {
+        valid: true,
+        label: "Three-of-a-Kind",
+        description:
+          "Name a specific card and steal it from a player if they have it.",
+      };
+    }
+    return {
+      valid: false,
+      label: "Invalid Triple",
+      description: "Triples must be 3 matching cat cards of the same type.",
+    };
+  }
+  if (selected.length === 5) {
+    const types = new Set(selected.map((c) => c.type));
+    if (types.size === 5) {
+      return {
+        valid: true,
+        label: "5-Card Special",
+        description: "Pick any card of your choice from the discard pile.",
+      };
+    }
+    return {
+      valid: false,
+      label: "Invalid 5-Card Set",
+      description: "All 5 cards must have distinct icons/types.",
+    };
+  }
+  return {
+    valid: false,
+    label: "Invalid Selection",
+    description:
+      "Select 1 action card, 2 or 3 matching cats, or 5 distinct cards.",
+  };
+}
+
 function isEkGame(gameId: string) {
   return gameId === "exploding-kittens" || gameId === "detonation-cats";
 }
@@ -74,17 +211,23 @@ export function ExplodingKittensTable({
   const { throwingCardId, playCard, isPlaying } = useEkPlayAnimation();
 
   const yourTurn = !!ek && ek.turnPlayerId === you?.id;
-  const hand = ek?.yourHand ?? [];
+  const hand = useMemo(() => ek?.yourHand ?? [], [ek?.yourHand]);
 
   const nopeCardId = useMemo(
     () => hand.find((c) => c.type === "nope")?.id ?? null,
     [hand]
   );
 
+  const selectionInfo = useMemo(
+    () => describeSelection(hand, selectedIds),
+    [hand, selectedIds]
+  );
+
   if (!ek || !isEkGame(state.gameId)) return null;
 
   const playPhase = yourTurn && ek.subPhase === "play" && !ek.nopeWindowEndsAt;
   const drawPhase = yourTurn && ek.subPhase === "draw" && !ek.nopeWindowEndsAt;
+  const canAct = yourTurn && you?.alive && !ek.nopeWindowEndsAt;
   const handDisabled = !playPhase && !(ek.nopeEligible && !!ek.nopeWindowEndsAt);
 
   const toggleCard = (card: PublicEkCard) => {
@@ -103,7 +246,7 @@ export function ExplodingKittensTable({
   };
 
   const playSelected = () => {
-    if (!selectedIds.length || isPlaying) return;
+    if (!selectedIds.length || isPlaying || !selectionInfo.valid) return;
     const ids = [...selectedIds];
     playCard(ids[0]!, () => {
       onPlayCards(ids);
@@ -192,7 +335,7 @@ export function ExplodingKittensTable({
         <EkStatusHud state={state} ek={ek} />
         <EkCenterPiles
           ek={ek}
-          canDraw={!!drawPhase && you?.alive}
+          canDraw={canAct}
           onDraw={onDraw}
         />
       </GlassPanel>
@@ -202,8 +345,20 @@ export function ExplodingKittensTable({
       ) : null}
 
       <GlassPanel className="p-4">
-        <h3 className="font-display text-xl font-bold">Your hand</h3>
-        <p className="mt-1 text-sm text-ink-steel">{hand.length} cards</p>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="font-display text-xl font-bold">Your hand</h3>
+            <p className="mt-0.5 text-xs text-ink-steel">
+              {hand.length} cards {yourTurn ? "• Your turn" : "• Waiting for opponent"}
+            </p>
+          </div>
+          {canAct && (
+            <span className="rounded-full bg-crimson/15 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-crimson animate-pulse">
+              Active Turn
+            </span>
+          )}
+        </div>
+
         <div className="mt-4">
           <EkPlayerHand
             cards={hand}
@@ -213,23 +368,74 @@ export function ExplodingKittensTable({
             onToggle={toggleCard}
           />
         </div>
-        {playPhase && you?.alive ? (
-          <div className="mt-4 flex flex-wrap gap-2">
-            <PrimaryButton
-              type="button"
-              disabled={selectedIds.length === 0 || isPlaying}
-              onClick={playSelected}
+
+        {canAct ? (
+          <div className="mt-4 space-y-3 rounded-md border border-crimson/20 bg-manila/60 p-3">
+            {/* Combo & Selection Helper Banner */}
+            <div
+              className={`rounded border px-3 py-2 text-xs transition ${
+                selectionInfo.valid
+                  ? "border-emerald-600/40 bg-emerald-500/10 text-emerald-900"
+                  : selectedIds.length > 0
+                    ? "border-amber-600/40 bg-amber-500/10 text-amber-900"
+                    : "border-crimson/15 bg-manila/80 text-ink-steel"
+              }`}
             >
-              Play selected
-            </PrimaryButton>
-            <button
-              type="button"
-              disabled={isPlaying}
-              onClick={onEndTurn}
-              className="rounded-sm border border-crimson/30 px-4 py-2 font-mono text-[10px] uppercase tracking-widest text-crimson hover:bg-crimson/5"
-            >
-              {drawPhase ? "Draw" : "End play phase"}
-            </button>
+              <div className="flex items-center justify-between">
+                <span className="font-bold uppercase tracking-wider">
+                  {selectionInfo.label}
+                </span>
+                {selectedIds.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedIds([])}
+                    className="font-mono text-[10px] text-crimson underline hover:text-crimson-dark"
+                  >
+                    Clear selection
+                  </button>
+                )}
+              </div>
+              <p className="mt-0.5 text-[11px] leading-relaxed opacity-90">
+                {selectionInfo.description}
+              </p>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex flex-wrap items-center gap-2">
+              {selectedIds.length > 0 && playPhase && (
+                <PrimaryButton
+                  type="button"
+                  disabled={!selectionInfo.valid || isPlaying}
+                  onClick={playSelected}
+                  className="!bg-emerald-700 hover:!bg-emerald-600 !text-white font-bold shadow-md"
+                >
+                  {isPlaying ? "Playing..." : `Play Selected (${selectedIds.length})`}
+                </PrimaryButton>
+              )}
+
+              <button
+                type="button"
+                disabled={isPlaying}
+                onClick={onDraw}
+                className="group relative flex items-center gap-2 rounded-sm bg-gradient-to-r from-crimson to-crimson-dark px-5 py-2.5 font-display text-xs font-bold uppercase tracking-wider text-manila shadow-md hover:from-crimson-glow hover:to-crimson transition active:scale-95 disabled:opacity-50"
+              >
+                <span>Draw Card & End Turn</span>
+                <span className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-[10px]">
+                  {ek.drawPileCount} cards left
+                </span>
+              </button>
+
+              {playPhase && selectedIds.length === 0 && (
+                <button
+                  type="button"
+                  disabled={isPlaying}
+                  onClick={onEndTurn}
+                  className="rounded-sm border border-crimson/30 px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-ink-steel hover:bg-crimson/5 hover:text-crimson"
+                >
+                  Pass to Draw Phase
+                </button>
+              )}
+            </div>
           </div>
         ) : null}
       </GlassPanel>
