@@ -1,29 +1,27 @@
 # Game server deployment
 
-SMOKEDOG production runs entirely on **Cloudflare Workers**:
+SMOKEDOG runs on a **hybrid high-availability architecture**:
 
-| Layer | Worker | URL |
-| --- | --- | --- |
-| **UI** | `sd` (OpenNext) | https://sd.smokedog.workers.dev |
-| **Game server** | `sd-game` (Socket.io + Durable Objects) | https://sd-game.smokedog.workers.dev |
+| Layer | Host | URL | Details |
+| --- | --- | --- | --- |
+| **Frontend UI** | **Cloudflare Pages / Workers** (OpenNext) | https://smokedog.pages.dev / https://sd.alpainoocompany.workers.dev | Global edge CDN, Next.js 14, client assets & SSR |
+| **Backend Game Runtime** | **Oracle Cloud VM** (PM2 `smokedog-arena`) | https://smokedog.duckdns.org | Persistent room state, 24/7 in-memory GameRuntime, Socket.IO WebSockets |
 
-The UI connects via **`NEXT_PUBLIC_SOCKET_URL`**, set in `wrangler.jsonc` and embedded at build/deploy time.
+The frontend connects directly to the Oracle backend via **`NEXT_PUBLIC_SOCKET_URL`** (`https://smokedog.duckdns.org`), eliminating Cloudflare Durable Object hibernation so rooms stay alive indefinitely without expiring.
 
 ---
 
-## Deploy
-
-From the repo root (requires `wrangler login`):
+## Deploying Frontend (Cloudflare Pages / Workers)
 
 ```bash
-# Game server (deploy first when changing socket handlers)
-npm run deploy:cf:game
+# Build Next.js & OpenNext Cloudflare bundle
+npm run build:cf
 
-# UI
-npm run deploy:cf
+# Deploy to Cloudflare Worker with Assets
+npx wrangler deploy
 
-# Both
-npm run deploy:cf:all
+# Or deploy to Cloudflare Pages
+npx wrangler pages deploy .open-next/assets --project-name smokedog
 ```
 
 After changing game logic in `src/server/*`, redeploy **`sd-game`**. After UI/client changes, redeploy **`sd`** (or both).

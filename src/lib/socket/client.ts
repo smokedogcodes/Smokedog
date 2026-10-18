@@ -11,25 +11,23 @@ export type GameSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 let socket: GameSocket | null = null;
 let socketUrl: string | null = null;
 
-/** Map UI worker host → game worker host (Cloudflare workers.dev). */
-function gameServerUrlFromUiHost(hostname: string): string | null {
-  const workersDev = hostname.match(/^(?:sd|smokedog)\.(.+)\.workers\.dev$/);
-  if (workersDev) {
-    const prefix = hostname.startsWith("sd.") ? "sd-game" : "smokedog-game";
-    return `https://${prefix}.${workersDev[1]}.workers.dev`;
-  }
-  return null;
-}
-
 export function getSocketUrl(): string {
   const env = process.env.NEXT_PUBLIC_SOCKET_URL;
   if (env && env.trim()) return env.trim();
   if (typeof window !== "undefined") {
-    const mapped = gameServerUrlFromUiHost(window.location.hostname);
-    if (mapped) return mapped;
+    const host = window.location.hostname;
+    // Cloudflare hosted frontends (Workers/Pages) connect to the persistent Oracle game server
+    if (
+      host.endsWith(".workers.dev") ||
+      host.endsWith(".pages.dev") ||
+      host === "sd.smokedog.workers.dev" ||
+      host === "smokedog.duckdns.org"
+    ) {
+      return "https://smokedog.duckdns.org";
+    }
     return window.location.origin;
   }
-  return "http://localhost:3000";
+  return "https://smokedog.duckdns.org";
 }
 
 /** Drop cached socket (e.g. after URL / deploy changes). */
