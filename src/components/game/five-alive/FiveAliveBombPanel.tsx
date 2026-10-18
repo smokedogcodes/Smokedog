@@ -103,10 +103,10 @@ export function FiveAliveBombPanel({
         className={`${FA_HAND_PANEL_CLASS} p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4`}
         style={FA_HAND_PANEL_STYLE}
       >
-        <h3 className="font-sans text-lg font-bold uppercase tracking-wide text-[#7D2D2D] sm:text-xl">
+        <h3 className="font-sans text-base font-bold uppercase tracking-wide text-[#7D2D2D] sm:text-xl">
           Your hand
         </h3>
-        <p className="mt-1 text-sm text-[#7D2D2D]/70">
+        <p className="mt-1 text-xs text-[#7D2D2D]/70 sm:text-sm">
           Bomb resolves automatically — number 0 saves you, otherwise lose 1 life.
         </p>
         <div className="mt-2 pt-1 sm:mt-4">

@@ -6,6 +6,7 @@ import { ticTacToeModule } from "./tic-tac-toe/engine";
 import { connect4Module } from "./connect-4/engine";
 import { explodingKittensModule } from "./exploding-kittens/engine";
 import { battleshipModule } from "./battleship/engine";
+import { codenamesModule } from "./codenames/engine";
 
 const modules: Record<string, GameModule> = {
   [mafiaCityModule.id]: mafiaCityModule,
@@ -15,6 +16,7 @@ const modules: Record<string, GameModule> = {
   [ticTacToeModule.id]: ticTacToeModule,
   [connect4Module.id]: connect4Module,
   [battleshipModule.id]: battleshipModule,
+  [codenamesModule.id]: codenamesModule,
 };
 
 export function resolveGameId(id?: string): string {
@@ -74,6 +76,14 @@ export function resolveGameId(id?: string): string {
     normalized === "tactical-battleship"
   ) {
     return battleshipModule.id;
+  }
+
+  if (
+    normalized === "codenames" ||
+    normalized === "cn" ||
+    normalized === "code-names"
+  ) {
+    return codenamesModule.id;
   }
 
   return normalized;

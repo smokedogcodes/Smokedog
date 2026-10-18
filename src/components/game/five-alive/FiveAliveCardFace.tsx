@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { fiveAliveCardVisual } from "@/lib/games/5-alive/card-visual";
+import { faFooterName } from "@/lib/mockups/five-alive-deck-art";
 import type { PublicFiveAliveCard } from "@/lib/types";
 import { FaReverseIcon, FaPassMeByIcon } from "@/components/mockups/five-alive/FiveAliveActionIcons";
 
@@ -51,6 +52,7 @@ export function FiveAliveCardFace({
   elevated = false,
 }: FiveAliveCardFaceProps) {
   const visual = fiveAliveCardVisual(card);
+  const footer = faFooterName(card);
   const isUtility =
     card.type === "skip" || card.type === "reverse";
 
@@ -66,6 +68,7 @@ export function FiveAliveCardFace({
         className
       )}
       style={{ fontSize: width / 11, width }}
+      title={footer}
     >
       <div className="absolute inset-x-0 top-[0.5em] text-center font-display text-[0.72em] font-extrabold uppercase tracking-[0.18em] text-[#8B1E1E]">
         5 Alive
@@ -75,7 +78,7 @@ export function FiveAliveCardFace({
         <CategoryIcon category={visual.category} className={visual.accentClass} />
       </div>
 
-      <div className="absolute inset-[12%_8%] flex flex-col items-center justify-center px-1">
+      <div className="absolute inset-[12%_8%_20%_8%] flex flex-col items-center justify-center px-1">
         {isUtility ? (
           card.type === "reverse" ? (
             <div className={cn("mb-0.5 size-[1.7em]", visual.accentClass)}>
@@ -99,9 +102,9 @@ export function FiveAliveCardFace({
         </span>
       </div>
 
-      <div className="absolute inset-x-0 bottom-[0.5em] text-center">
-        <span className="rounded-full bg-black/[0.04] px-2 py-0.5 font-mono text-[0.62em] uppercase tracking-widest text-[#457b9d]">
-          {visual.tagLabel}
+      <div className="absolute inset-x-0 bottom-[0.35em] px-1 text-center">
+        <span className="block truncate font-mono text-[0.55em] font-bold uppercase tracking-wider text-[#5c4033]/90">
+          {footer}
         </span>
       </div>
     </div>

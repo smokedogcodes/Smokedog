@@ -6,11 +6,12 @@ export type FiveAliveDealStep = {
 };
 
 export const FA_ROUND_BANNER_MS = 1600;
-export const FA_DEAL_CARD_MS = 980;
-export const FA_DEAL_MIN_STAGGER_MS = 70;
-export const FA_DEAL_MAX_STAGGER_MS = 140;
+/** Per-card flight duration (center → seat). */
+export const FA_DEAL_CARD_MS = 1450;
+export const FA_DEAL_MIN_STAGGER_MS = 180;
+export const FA_DEAL_MAX_STAGGER_MS = 320;
 /** Target window for the staggered deal sequence (excluding banner). */
-export const FA_DEAL_TARGET_MS = 3200;
+export const FA_DEAL_TARGET_MS = 6200;
 
 export function computeDealStaggerMs(stepCount: number): number {
   if (stepCount <= 1) return FA_DEAL_MAX_STAGGER_MS;

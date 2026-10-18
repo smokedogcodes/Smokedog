@@ -6,6 +6,7 @@ import {
   faActionType,
   faCenterLabel,
   faCornerLabel,
+  faFooterName,
   faIsDeathCard,
   faStripeBackground,
   faUsesCenterText,
@@ -255,6 +256,7 @@ export function FiveAliveDeckCard({
   const accent = faAccentColor(card);
   const center = faCenterLabel(card);
   const corner = faCornerLabel(card);
+  const footer = faFooterName(card);
   const isDeath = faIsDeathCard(card);
   const bg = isDeath ? FA_DEATH_STRIPE : faStripeBackground(accent);
   const ringClass =
@@ -264,6 +266,8 @@ export function FiveAliveDeckCard({
       : selected
         ? "ring-2 ring-white ring-offset-2 ring-offset-[#2a1810] scale-[1.04]"
         : "");
+  // px floor so names stay readable on tiny center-fan cards too
+  const footerPx = Math.max(6.5, Math.min(10.5, width * 0.105));
 
   return (
     <div
@@ -275,13 +279,14 @@ export function FiveAliveDeckCard({
         className
       )}
       style={{ width, fontSize: width / 9, background: bg }}
+      title={footer}
     >
-      <div className="absolute left-[0.4em] top-[0.32em]">
+      <div className="absolute left-[0.4em] top-[0.32em] z-[1]">
         <CornerGlyph card={card} label={corner} position="top" />
       </div>
       <div
         className={cn(
-          "absolute bottom-[0.32em] right-[0.4em]",
+          "absolute bottom-[1.05em] right-[0.4em] z-[1]",
           card.type !== "skip" && "rotate-180"
         )}
       >
@@ -289,11 +294,25 @@ export function FiveAliveDeckCard({
       </div>
 
       <div
-        className="absolute inset-[14%_10%] flex items-center justify-center"
+        className="absolute inset-[11%_9%_24%_9%] flex items-center justify-center"
         style={{ transform: "rotate(4deg)" }}
       >
         {faUsesIcon(card) ? <CenterGlyph card={card} /> : null}
         {faUsesCenterText(card) ? <CenterText label={center} /> : null}
+      </div>
+
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[2] bg-gradient-to-t from-black/55 via-black/28 to-transparent pb-[0.18em] pt-[0.65em]">
+        <p
+          className="truncate px-[0.2em] text-center font-black uppercase leading-none text-white"
+          style={{
+            fontFamily: CARD_FONT,
+            fontSize: footerPx,
+            letterSpacing: width < 60 ? "0.02em" : "0.05em",
+            textShadow: "0 1px 1px rgba(0,0,0,0.75)",
+          }}
+        >
+          {footer}
+        </p>
       </div>
     </div>
   );

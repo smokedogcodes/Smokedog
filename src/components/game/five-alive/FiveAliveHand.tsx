@@ -25,6 +25,8 @@ const GAME_RING =
   "ring-2 ring-[#8B1E1E] ring-offset-2 ring-offset-manila scale-[1.04]";
 const GAME_DEFUSE_RING =
   "ring-2 ring-[#2a9d8f] ring-offset-2 ring-offset-manila scale-[1.04]";
+const GAME_PLAYABLE_RING =
+  "ring-2 ring-[#2a9d8f] ring-offset-2 ring-offset-manila scale-[1.02]";
 
 const FiveAliveHandCard = forwardRef<
   HTMLButtonElement,
@@ -72,9 +74,11 @@ const FiveAliveHandCard = forwardRef<
         selectedRingClass={
           highlight === "defuse"
             ? GAME_DEFUSE_RING
-            : selected
-              ? GAME_RING
-              : undefined
+            : highlight === "playable"
+              ? GAME_PLAYABLE_RING
+              : selected
+                ? GAME_RING
+                : undefined
         }
       />
     </motion.button>
@@ -169,12 +173,10 @@ export function FiveAliveHand({
         {cards.map((card) => {
           const isHidden = hiddenCardId === card.id;
           const isSelected = selectedCardId === card.id;
-          const canPlay = !disabled && (!playableFilter || playableFilter(card));
-          const highlight = playableFilter?.(card)
-            ? "defuse"
-            : canPlay
-              ? "playable"
-              : null;
+          const allowedByFilter = !playableFilter || playableFilter(card);
+          const canPlay = !disabled && allowedByFilter;
+          // Only ring cards that are actually legal for the current total.
+          const highlight = allowedByFilter && playableFilter ? "playable" : null;
 
           return (
             <FiveAliveHandCard

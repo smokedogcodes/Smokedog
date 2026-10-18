@@ -52,6 +52,8 @@ import { BoardLobbyView } from "@/components/game/board/BoardLobbyView";
 import { TttBoard } from "@/components/game/tic-tac-toe/TttBoard";
 import { Connect4Board } from "@/components/game/connect-4/Connect4Board";
 import { BattleshipTable } from "@/components/game/battleship/BattleshipTable";
+import { CodenamesBoard } from "@/components/game/codenames/CodenamesBoard";
+import { CodenamesLobbyView } from "@/components/game/codenames/CodenamesLobbyView";
 import { SpectatorBanner } from "@/components/game/mafia/SpectatorBanner";
 
 export function GameClient({
@@ -798,6 +800,24 @@ export function GameClient({
               socket.emit("lobby:return", { roomId: state.roomId });
             }}
           />
+        ) : state.phase === "gameover" && state.gameId === "codenames" ? (
+          <CodenamesBoard
+            state={state}
+            onGiveClue={(word, number) =>
+              socket.emit("codenames:giveClue", { roomId: state.roomId, word, number })
+            }
+            onGuess={(cardIndex) =>
+              socket.emit("codenames:guess", { roomId: state.roomId, cardIndex })
+            }
+            onEndTurn={() =>
+              socket.emit("codenames:endTurn", { roomId: state.roomId })
+            }
+            onReturnToLobby={() => {
+              if (returningToLobby) return;
+              setReturningToLobby(true);
+              socket.emit("lobby:return", { roomId: state.roomId });
+            }}
+          />
         ) : state.phase === "gameover" ? (
           <GameOverScreen
             state={state}
@@ -893,6 +913,19 @@ export function GameClient({
                     onRemoveBot={emitRemoveBot}
                     onSettings={emitSettings}
                   />
+                ) : state.gameId === "codenames" ? (
+                  <CodenamesLobbyView
+                    state={state}
+                    onStart={emitStart}
+                    starting={startingGame}
+                    onSetRole={(team, role) =>
+                      socket.emit("codenames:setRole", { roomId: state.roomId, team, role })
+                    }
+                    onRandomizeTeams={() =>
+                      socket.emit("codenames:randomizeTeams", { roomId: state.roomId })
+                    }
+                    onSettings={emitSettings}
+                  />
                 ) : (
                   <LobbyView
                     state={state}
@@ -985,6 +1018,26 @@ export function GameClient({
               (state.phase === "battleship_setup" ||
                 state.phase === "battleship_play") && (
               <BattleshipTable state={state} socket={socket} />
+            )}
+
+            {!state.spectatorMode &&
+              state.gameId === "codenames" &&
+              state.phase === "codenames_play" && (
+              <CodenamesBoard
+                state={state}
+                onGiveClue={(word, number) =>
+                  socket.emit("codenames:giveClue", { roomId: state.roomId, word, number })
+                }
+                onGuess={(cardIndex) =>
+                  socket.emit("codenames:guess", { roomId: state.roomId, cardIndex })
+                }
+                onEndTurn={() =>
+                  socket.emit("codenames:endTurn", { roomId: state.roomId })
+                }
+                onReturnToLobby={() =>
+                  socket.emit("lobby:return", { roomId: state.roomId })
+                }
+              />
             )}
 
             {!state.spectatorMode && state.phase === "reveal" && (

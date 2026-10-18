@@ -464,6 +464,51 @@ export function wireGameSockets(io: IoServer): GameRuntime {
       runtime.submitBattleshipRematch(payload.roomId, playerIdOf(socket)!);
     });
 
+    socket.on("codenames:setRole", (payload) => {
+      if (!playerIdOf(socket)) return;
+      runtime.submitCodenamesRole(
+        payload.roomId,
+        playerIdOf(socket)!,
+        payload.team,
+        payload.role
+      );
+    });
+
+    socket.on("codenames:giveClue", (payload) => {
+      if (!playerIdOf(socket)) return;
+      runtime.submitCodenamesClue(
+        payload.roomId,
+        playerIdOf(socket)!,
+        payload.word,
+        payload.number
+      );
+    });
+
+    socket.on("codenames:guess", (payload) => {
+      if (!playerIdOf(socket)) return;
+      runtime.submitCodenamesGuess(
+        payload.roomId,
+        playerIdOf(socket)!,
+        payload.cardIndex
+      );
+    });
+
+    socket.on("codenames:endTurn", (payload) => {
+      if (!playerIdOf(socket)) return;
+      runtime.submitCodenamesEndTurn(
+        payload.roomId,
+        playerIdOf(socket)!
+      );
+    });
+
+    socket.on("codenames:randomizeTeams", (payload) => {
+      if (!playerIdOf(socket)) return;
+      runtime.submitCodenamesRandomizeTeams(
+        payload.roomId,
+        playerIdOf(socket)!
+      );
+    });
+
     socket.on("chat:send", (payload) => {
       if (!playerIdOf(socket)) return;
       runtime.sendChat(

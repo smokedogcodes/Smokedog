@@ -137,7 +137,7 @@ export function wouldNumberBust(
   runningTotal: number,
   value: number
 ): boolean {
-  return runningTotal + value > 21;
+  return Number(runningTotal) + Number(value) > 21;
 }
 
 /** Only a number 0 card defuses a Bomb. */
@@ -219,8 +219,9 @@ export function resolveFiveAliveTurnPlay(
 
   switch (card.type) {
     case "number": {
-      const tentative = state.runningTotal + card.value;
-      if (tentative > 21) {
+      const tentative =
+        Number(state.runningTotal) + Number(card.value);
+      if (!Number.isFinite(tentative) || tentative > 21) {
         return {
           kind: "bust",
           logs: [`${actorName} busts (>21) — lose 1 life, reset to 0.`],

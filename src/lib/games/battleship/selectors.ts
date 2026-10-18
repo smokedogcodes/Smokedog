@@ -17,6 +17,10 @@ export type PublicGridCell = {
   /** Own fleet: ship segment / hit on self */
   ship?: ShipType | null;
   hitOnShip?: boolean;
+  /** Segment metadata so UI can draw continuous hull art */
+  shipIndex?: number;
+  shipLength?: number;
+  shipOrientation?: "horizontal" | "vertical";
   /** Incoming / outgoing marks */
   mark?: CellMark | null;
   smoke?: boolean;
@@ -99,11 +103,18 @@ export function projectBattleshipPublic(
 
   if (you) {
     for (const ship of yourFleet) {
+      const orientation =
+        ship.cells.length > 1 && ship.cells[1]!.col === ship.cells[0]!.col
+          ? ("vertical" as const)
+          : ("horizontal" as const);
       ship.cells.forEach((c, i) => {
         yourGrid[c.row]![c.col] = {
           ...yourGrid[c.row]![c.col]!,
           ship: ship.type,
           hitOnShip: ship.hits[i],
+          shipIndex: i,
+          shipLength: ship.cells.length,
+          shipOrientation: orientation,
         };
       });
     }
@@ -151,12 +162,27 @@ export function projectBattleshipPublic(
           );
           if (hit) mark = "hit";
           else if (mark === "miss" || mark === "obscured") mark = mark === "obscured" ? (has ? "hit" : "miss") : mark;
+          const ship = oppFleet.find((s) =>
+            s.cells.some((c) => c.col === col && c.row === row)
+          );
+          const seg = ship
+            ? ship.cells.findIndex((c) => c.col === col && c.row === row)
+            : -1;
+          const orientation =
+            ship &&
+            ship.cells.length > 1 &&
+            ship.cells[1]!.col === ship.cells[0]!.col
+              ? ("vertical" as const)
+              : ("horizontal" as const);
           radarGrid[row]![col] = {
             col,
             row,
             mark,
-            ship: has ? oppFleet.find((s) => s.cells.some((c) => c.col === col && c.row === row))!.type : null,
+            ship: ship?.type ?? null,
             hitOnShip: hit,
+            shipIndex: seg >= 0 ? seg : undefined,
+            shipLength: ship?.cells.length,
+            shipOrientation: ship ? orientation : undefined,
             smoke: oppSmokeKeys.has(k),
           };
         } else {

@@ -103,10 +103,10 @@ export function FiveAliveDealingPanel({
         className={`${FA_HAND_PANEL_CLASS} p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4`}
         style={FA_HAND_PANEL_STYLE}
       >
-        <h3 className="font-sans text-lg font-bold uppercase tracking-wide text-[#7D2D2D] sm:text-xl">
+        <h3 className="font-sans text-base font-bold uppercase tracking-wide text-[#7D2D2D] sm:text-xl">
           Your hand
         </h3>
-        <p className="mt-1 text-sm text-[#7D2D2D]/70">Cards arriving…</p>
+        <p className="mt-1 text-xs text-[#7D2D2D]/70 sm:text-sm">Cards arriving…</p>
         <div
           ref={handTargetRef}
           className="relative mt-3 min-h-[100px] pt-1 sm:mt-4 sm:min-h-[120px]"

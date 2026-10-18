@@ -15,6 +15,7 @@ import type { FiveAliveDealEvent, PublicFiveAliveCard } from "@/lib/types";
 function rectOf(el: HTMLElement | null): FlyRect | null {
   if (!el) return null;
   const r = el.getBoundingClientRect();
+  if (r.width < 2 || r.height < 2) return null;
   return { left: r.left, top: r.top, width: r.width, height: r.height };
 }
 
@@ -35,13 +36,14 @@ export function useFiveAliveDealing({
   phase,
   youId,
   drawRef,
-  handTargetRef,
+  handTargetRef: _handTargetRef,
   seatRefs,
 }: {
   dealEvent: FiveAliveDealEvent | null | undefined;
   phase: string;
   youId: string | null;
   drawRef: React.RefObject<HTMLElement | null>;
+  /** Kept for call-site compat; deals now target seat avatars. */
   handTargetRef: React.RefObject<HTMLElement | null>;
   seatRefs: React.MutableRefObject<Map<string, HTMLElement>>;
 }) {
@@ -111,25 +113,24 @@ export function useFiveAliveDealing({
       stepIndex: number,
       retry = 0
     ) => {
-      const from = rectOf(drawRef.current);
-      const isLocal = step.playerId === youIdRef.current;
-      const seatEl = isLocal
-        ? handTargetRef.current
-        : seatRefs.current.get(step.playerId) ?? null;
-      const to = rectOf(seatEl);
+      const originEl = drawRef.current;
+      const origin = rectOf(originEl);
+      // Always deal into the seat pod (avatar) — including the local player.
+      const seatEl = seatRefs.current.get(step.playerId) ?? null;
+      const seat = rectOf(seatEl);
 
       // Seat/draw targets can mount a frame late on shuffle redeal — retry briefly.
-      if ((!from || !to) && retry < 8) {
+      if ((!origin || !seat) && retry < 10) {
         timersRef.current.push(
           setTimeout(
             () => startStepFly(step, flyId, stepIndex, retry + 1),
-            50 + retry * 25
+            50 + retry * 30
           )
         );
         return;
       }
 
-      if (!from || !to) {
+      if (!origin || !seat) {
         playCardDeal();
         startedCountRef.current += 1;
         setStartedCount(startedCountRef.current);
@@ -140,6 +141,27 @@ export function useFiveAliveDealing({
       playCardDeal();
       startedCountRef.current += 1;
       setStartedCount(startedCountRef.current);
+
+      const isLocal = step.playerId === youIdRef.current;
+      const fromW = 46;
+      const fromH = (fromW * 7) / 5;
+      const toW = 34;
+      const toH = (toW * 7) / 5;
+
+      const from: FlyRect = {
+        left: origin.left + origin.width / 2 - fromW / 2,
+        top: origin.top + origin.height / 2 - fromH / 2,
+        width: fromW,
+        height: fromH,
+      };
+      // Aim at upper-mid of the seat (avatar), not the life fan at the bottom.
+      const to: FlyRect = {
+        left: seat.left + seat.width / 2 - toW / 2,
+        top: seat.top + seat.height * 0.38 - toH / 2,
+        width: toW,
+        height: toH,
+      };
+
       const card = step.card ?? PLACEHOLDER_CARD;
       setFlies((prev) => [
         ...prev,
@@ -149,17 +171,13 @@ export function useFiveAliveDealing({
           stepIndex,
           card,
           from,
-          to: {
-            ...to,
-            width: isLocal ? 72 : 52,
-            height: isLocal ? (72 * 7) / 5 : (52 * 7) / 5,
-          },
+          to,
           kind: "deal",
           flipToFace: isLocal && !!step.card,
         },
       ]);
     },
-    [drawRef, handTargetRef, landStep, seatRefs]
+    [drawRef, landStep, seatRefs]
   );
 
   useEffect(() => {

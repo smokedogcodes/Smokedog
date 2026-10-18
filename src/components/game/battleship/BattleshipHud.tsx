@@ -31,14 +31,14 @@ export function BattleshipHud({
 
   return (
     <div
-      className={`rounded-sm border px-4 py-3 ${
+      className={`rounded-sm border px-3 py-2 sm:px-4 sm:py-2.5 ${
         yourTurn
           ? "border-amber-400/50 bg-amber-500/10"
           : "border-cyan-700/40 bg-slate-950/70"
       }`}
     >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="font-mono text-xs uppercase tracking-widest text-cyan-100">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="font-mono text-[10px] uppercase tracking-widest text-cyan-100 sm:text-xs">
           {setup
             ? "Fleet placement"
             : yourTurn
@@ -47,7 +47,7 @@ export function BattleshipHud({
         </p>
         {phaseEndsAt ? (
           <p
-            className={`font-display text-2xl font-bold tabular-nums ${
+            className={`font-display text-xl font-bold tabular-nums sm:text-2xl ${
               warn ? "animate-pulse text-red-400" : "text-cyan-200"
             }`}
           >
@@ -56,7 +56,9 @@ export function BattleshipHud({
         ) : null}
       </div>
       {log[0] ? (
-        <p className="mt-2 text-sm text-cyan-200/80">{log[log.length - 1]}</p>
+        <p className="mt-1 text-xs text-cyan-200/80 sm:text-sm">
+          {log[log.length - 1]}
+        </p>
       ) : null}
     </div>
   );

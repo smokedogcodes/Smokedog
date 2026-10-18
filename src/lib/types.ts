@@ -32,7 +32,8 @@ export type Phase =
   | "ttt_play"
   | "connect4_play"
   | "battleship_setup"
-  | "battleship_play";
+  | "battleship_play"
+  | "codenames_play";
 
 export type DaySubPhase = "discussion" | "vote";
 
@@ -78,6 +79,8 @@ export interface RoomSettings {
   roleDistribution?: RoleDistribution | null;
   /** Mafia City: no chat/voice/discussion — popups + actions only. */
   localMode?: boolean;
+  codenamesClueSeconds?: number;
+  codenamesGuessSeconds?: number;
 }
 
 export type PhaseAnnouncement = {
@@ -240,11 +243,56 @@ export interface PublicGameState {
   ttt?: TttPublicState;
   connect4?: Connect4PublicState;
   battleship?: import("@/lib/games/battleship/selectors").BattleshipPublicState;
+  codenames?: CodenamesPublicState;
   boardWinnerId?: string | null;
   boardDraw?: boolean;
   /** External observer — not seated as a player. */
   spectatorMode?: boolean;
 }
+
+export type CodenamesCardType = "red" | "blue" | "neutral" | "assassin";
+export type CodenamesTeam = "red" | "blue";
+export type CodenamesRole = "spymaster" | "operative";
+
+export type CodenamesPublicCard = {
+  id: number;
+  word: string;
+  revealed: boolean;
+  type?: CodenamesCardType;
+};
+
+export type CodenamesPublicState = {
+  cards: CodenamesPublicCard[];
+  currentTurn: CodenamesTeam;
+  turnSubPhase: "clue" | "guess";
+  startingTeam: CodenamesTeam;
+  redScore: number;
+  blueScore: number;
+  redTotal: number;
+  blueTotal: number;
+  currentClue: {
+    word: string;
+    number: number;
+  } | null;
+  guessesRemaining: number;
+  winner: CodenamesTeam | null;
+  winReason?: "agents" | "assassin";
+  teams: {
+    red: {
+      spymasterId: string | null;
+      operativeIds: string[];
+    };
+    blue: {
+      spymasterId: string | null;
+      operativeIds: string[];
+    };
+  };
+  log: Array<{
+    text: string;
+    team: CodenamesTeam;
+    at: number;
+  }>;
+};
 
 export type SpotItPublicState = {
   centerCard: number[];
@@ -506,6 +554,26 @@ export type ClientToServerEvents = {
     direction?: "N" | "S" | "E" | "W";
   }) => void;
   "battleship:rematch": (payload: { roomId: string }) => void;
+  "codenames:setRole": (payload: {
+    roomId: string;
+    team: CodenamesTeam;
+    role: CodenamesRole;
+  }) => void;
+  "codenames:giveClue": (payload: {
+    roomId: string;
+    word: string;
+    number: number;
+  }) => void;
+  "codenames:guess": (payload: {
+    roomId: string;
+    cardIndex: number;
+  }) => void;
+  "codenames:endTurn": (payload: {
+    roomId: string;
+  }) => void;
+  "codenames:randomizeTeams": (payload: {
+    roomId: string;
+  }) => void;
   "chat:send": (payload: {
     roomId: string;
     channel: ChatChannel;

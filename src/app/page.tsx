@@ -124,6 +124,16 @@ const GAME_CARDS: GameCard[] = [
     moreInfo: true,
   },
   {
+    id: "codenames",
+    title: "Codenames",
+    pitch: "Give one-word clues. Deduce secret agents. Beware the assassin.",
+    players: "2–16 Players",
+    duration: "10–15 Mins",
+    image: "/games/codenames.jpg",
+    badge: "Live",
+    moreInfo: true,
+  },
+  {
     id: "five-alive",
     title: "5 Alive",
     pitch: "Keep it under 21. Busts cost lives. Bombs demand instant 0s.",

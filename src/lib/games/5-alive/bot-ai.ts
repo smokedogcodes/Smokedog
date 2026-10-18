@@ -21,9 +21,12 @@ export function pickBotFiveAliveTurnPlay(
 ): { cardId?: string; pass?: boolean } | null {
   if (hand.length === 0) return null;
 
-  if (runningTotal === 21) {
+  const total = Number(runningTotal);
+  if (!Number.isFinite(total)) return null;
+
+  if (total === 21) {
     const zeros = hand.filter(
-      (c) => c.type === "number" && (c.value ?? -1) === 0
+      (c) => c.type === "number" && Number(c.value) === 0
     );
     if (zeros.length > 0) return { cardId: pick(zeros)!.id };
     const unlocks = hand.filter((c) => isPlayableAtTwentyOne(c.type));
@@ -38,7 +41,7 @@ export function pickBotFiveAliveTurnPlay(
 
   const safeNumbers = hand.filter(
     (c): c is Extract<FiveAliveCardInstance, { type: "number" }> =>
-      c.type === "number" && runningTotal + c.value <= 21
+      c.type === "number" && total + Number(c.value) <= 21
   );
   if (safeNumbers.length > 0) {
     const sorted = [...safeNumbers].sort((a, b) => b.value - a.value);

@@ -17,6 +17,8 @@ export function gameLabel(gameId: string): string {
       return "Connect 4";
     case "battleship":
       return "Tactical Battleship";
+    case "codenames":
+      return "Codenames";
     default:
       return gameId;
   }

@@ -108,6 +108,15 @@ import {
   submitFleetReady,
   triggerPowerUp,
 } from "@/lib/games/battleship/actions";
+import {
+  applyCardGuess,
+  autoBalanceTeams,
+  endOperativesTurn,
+  generateCodenamesBoard,
+  projectCodenamesPublic,
+  validateClue,
+  type CodenamesRoomState,
+} from "@/lib/games/codenames/logic";
 import { projectBattleshipPublic } from "@/lib/games/battleship/selectors";
 import type { BattleshipGameState } from "@/lib/games/battleship/state";
 import type { FleetPlacement } from "@/lib/games/battleship/placement";
@@ -271,6 +280,7 @@ interface Room {
   ttt?: TttRoomState;
   connect4?: Connect4RoomState;
   battleship?: BattleshipGameState;
+  codenames?: CodenamesRoomState;
   boardWinnerId?: string | null;
   boardDraw?: boolean;
   timer: ReturnType<typeof setTimeout> | null;
@@ -298,7 +308,11 @@ function log(room: Room, text: string) {
 
 function toPublicFiveAliveCard(card: FiveAliveCardInstance): PublicFiveAliveCard {
   if (card.type === "number") {
-    return { id: card.id, type: card.type, value: card.value };
+    return {
+      id: card.id,
+      type: card.type,
+      value: Number(card.value) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7,
+    };
   }
   return { id: card.id, type: card.type };
 }
@@ -982,7 +996,7 @@ export class GameRuntime {
                 : null;
 
             return {
-              runningTotal: five.runningTotal,
+              runningTotal: Number(five.runningTotal) || 0,
               direction: five.direction,
               turnPlayerId: five.pendingTurnAfterDeal ?? five.turnPlayerId,
               skipNext: five.skipNext,
@@ -1043,6 +1057,10 @@ export class GameRuntime {
       battleship:
         room.battleship && room.gameId === "battleship"
           ? projectBattleshipPublic(room.battleship, you?.id ?? null)
+          : undefined,
+      codenames:
+        room.codenames && room.gameId === "codenames"
+          ? projectCodenamesPublic(room.codenames, you?.id ?? null)
           : undefined,
       boardWinnerId: revealAll ? room.boardWinnerId ?? null : undefined,
       boardDraw: revealAll ? !!room.boardDraw : undefined,
@@ -2126,6 +2144,10 @@ export class GameRuntime {
       this.startBattleship(room);
       return;
     }
+    if (room.gameId === "codenames") {
+      this.startCodenames(room);
+      return;
+    }
 
     const deals = assignMafiaCityRoles(room.players.length, room.settings);
     const bullets = bulletsForLobby(room.players.length, room.settings);
@@ -3148,6 +3170,10 @@ export class GameRuntime {
     }
     if (room.gameId === "battleship") {
       this.onTimeoutBattleship(roomId);
+      return;
+    }
+    if (room.gameId === "codenames") {
+      this.onTimeoutCodenames(roomId);
       return;
     }
     if (room.phase === "reveal") {
@@ -4798,6 +4824,246 @@ export class GameRuntime {
         `${room.players.find((p) => p.id === turnId)?.name ?? "Player"} timed out — auto strike.`
       );
       this.afterBattleshipAction(room);
+    }
+  }
+
+  private startCodenames(room: Room) {
+    if (room.players.length < 2) {
+      log(room, "Codenames requires at least 2 players.");
+      return;
+    }
+
+    const playerIds = room.players.map((p) => p.id);
+    let teams = room.codenames?.teams;
+    if (!teams || (!teams.red.spymasterId && !teams.blue.spymasterId)) {
+      teams = autoBalanceTeams(playerIds);
+    } else {
+      const assigned = new Set<string>();
+      if (teams.red.spymasterId) assigned.add(teams.red.spymasterId);
+      if (teams.blue.spymasterId) assigned.add(teams.blue.spymasterId);
+      teams.red.operativeIds.forEach((id) => assigned.add(id));
+      teams.blue.operativeIds.forEach((id) => assigned.add(id));
+
+      playerIds.forEach((pid, idx) => {
+        if (!assigned.has(pid)) {
+          if (idx % 2 === 0) teams!.red.operativeIds.push(pid);
+          else teams!.blue.operativeIds.push(pid);
+        }
+      });
+
+      if (!teams.red.spymasterId && teams.red.operativeIds.length > 0) {
+        teams.red.spymasterId = teams.red.operativeIds.shift()!;
+      }
+      if (!teams.blue.spymasterId && teams.blue.operativeIds.length > 0) {
+        teams.blue.spymasterId = teams.blue.operativeIds.shift()!;
+      }
+    }
+
+    const startingTeam = Math.random() < 0.5 ? "red" : "blue";
+    const cards = generateCodenamesBoard(startingTeam);
+
+    room.winner = null;
+    room.logs = [];
+    room.codenames = {
+      cards,
+      currentTurn: startingTeam,
+      turnSubPhase: "clue",
+      startingTeam,
+      currentClue: null,
+      guessesRemaining: 0,
+      winner: null,
+      teams,
+      turnEndsAt: null,
+      log: [
+        {
+          text: `Codenames match started! ${startingTeam.toUpperCase()} team goes first.`,
+          team: startingTeam,
+          at: Date.now(),
+        },
+      ],
+    };
+
+    const clueSeconds = room.settings.codenamesClueSeconds ?? 60;
+    this.setPhase(room, "codenames_play", clueSeconds);
+    this.emitRoom(room);
+  }
+
+  submitCodenamesRole(
+    roomId: string,
+    playerId: string,
+    team: import("@/lib/types").CodenamesTeam,
+    role: import("@/lib/types").CodenamesRole
+  ) {
+    const room = this.getRoom(roomId);
+    if (!room || room.gameId !== "codenames") return;
+
+    if (!room.codenames) {
+      room.codenames = {
+        cards: [],
+        currentTurn: "red",
+        turnSubPhase: "clue",
+        startingTeam: "red",
+        currentClue: null,
+        guessesRemaining: 0,
+        winner: null,
+        teams: {
+          red: { spymasterId: null, operativeIds: [] },
+          blue: { spymasterId: null, operativeIds: [] },
+        },
+        turnEndsAt: null,
+        log: [],
+      };
+    }
+
+    const teams = room.codenames.teams;
+    if (teams.red.spymasterId === playerId) teams.red.spymasterId = null;
+    if (teams.blue.spymasterId === playerId) teams.blue.spymasterId = null;
+    teams.red.operativeIds = teams.red.operativeIds.filter((id) => id !== playerId);
+    teams.blue.operativeIds = teams.blue.operativeIds.filter((id) => id !== playerId);
+
+    if (role === "spymaster") {
+      const prev = teams[team].spymasterId;
+      if (prev && prev !== playerId) {
+        teams[team].operativeIds.push(prev);
+      }
+      teams[team].spymasterId = playerId;
+    } else {
+      teams[team].operativeIds.push(playerId);
+    }
+
+    this.emitRoom(room);
+  }
+
+  submitCodenamesRandomizeTeams(roomId: string, playerId: string) {
+    const room = this.getRoom(roomId);
+    if (!room || room.gameId !== "codenames" || room.phase !== "lobby") return;
+
+    const playerIds = room.players.map((p) => p.id);
+    const balanced = autoBalanceTeams(playerIds);
+    if (!room.codenames) {
+      room.codenames = {
+        cards: [],
+        currentTurn: "red",
+        turnSubPhase: "clue",
+        startingTeam: "red",
+        currentClue: null,
+        guessesRemaining: 0,
+        winner: null,
+        teams: balanced,
+        turnEndsAt: null,
+        log: [],
+      };
+    } else {
+      room.codenames.teams = balanced;
+    }
+    this.emitRoom(room);
+  }
+
+  submitCodenamesClue(
+    roomId: string,
+    playerId: string,
+    word: string,
+    number: number
+  ) {
+    const room = this.getRoom(roomId);
+    if (!room || room.gameId !== "codenames" || room.phase !== "codenames_play") return;
+    if (!room.codenames || room.codenames.turnSubPhase !== "clue") return;
+
+    const currentTeam = room.codenames.currentTurn;
+    const spymasterId = room.codenames.teams[currentTeam].spymasterId;
+    if (spymasterId !== playerId) return;
+
+    const validation = validateClue(word, number, room.codenames.cards);
+    if (!validation.valid) {
+      log(room, `Clue error: ${validation.error}`);
+      return;
+    }
+
+    const cleanWord = word.trim().toUpperCase();
+    room.codenames.currentClue = { word: cleanWord, number };
+    room.codenames.turnSubPhase = "guess";
+    room.codenames.guessesRemaining = number === 0 ? 99 : number + 1;
+    room.codenames.log.push({
+      text: `${currentTeam.toUpperCase()} Spymaster gave clue: "${cleanWord}" (${number})`,
+      team: currentTeam,
+      at: Date.now(),
+    });
+
+    const guessSeconds = room.settings.codenamesGuessSeconds ?? 90;
+    this.setPhase(room, "codenames_play", guessSeconds);
+    this.emitRoom(room);
+  }
+
+  submitCodenamesGuess(roomId: string, playerId: string, cardIndex: number) {
+    const room = this.getRoom(roomId);
+    if (!room || room.gameId !== "codenames" || room.phase !== "codenames_play") return;
+    if (!room.codenames || room.codenames.turnSubPhase !== "guess") return;
+
+    const currentTeam = room.codenames.currentTurn;
+    const spymasterId = room.codenames.teams[currentTeam].spymasterId;
+    if (spymasterId === playerId) return;
+
+    const isOperative = room.codenames.teams[currentTeam].operativeIds.includes(playerId);
+    if (!isOperative && room.codenames.teams[currentTeam].operativeIds.length > 0) {
+      return;
+    }
+
+    try {
+      const result = applyCardGuess(room.codenames, cardIndex);
+      if (result.gameEnded) {
+        this.setPhase(room, "gameover", 0);
+      } else if (result.turnEnded) {
+        const clueSeconds = room.settings.codenamesClueSeconds ?? 60;
+        this.setPhase(room, "codenames_play", clueSeconds);
+      }
+      this.emitRoom(room);
+    } catch (e) {
+      log(room, `Guess error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  submitCodenamesEndTurn(roomId: string, playerId: string) {
+    const room = this.getRoom(roomId);
+    if (!room || room.gameId !== "codenames" || room.phase !== "codenames_play") return;
+    if (!room.codenames || room.codenames.turnSubPhase !== "guess") return;
+
+    const currentTeam = room.codenames.currentTurn;
+    const spymasterId = room.codenames.teams[currentTeam].spymasterId;
+    if (spymasterId === playerId) return;
+
+    endOperativesTurn(room.codenames);
+    const clueSeconds = room.settings.codenamesClueSeconds ?? 60;
+    this.setPhase(room, "codenames_play", clueSeconds);
+    this.emitRoom(room);
+  }
+
+  private onTimeoutCodenames(roomId: string) {
+    const room = this.getRoom(roomId);
+    if (!room || room.paused || room.gameId !== "codenames" || !room.codenames) return;
+
+    if (room.codenames.turnSubPhase === "clue") {
+      const currentTeam = room.codenames.currentTurn;
+      const opponent = currentTeam === "red" ? "blue" : "red";
+      room.codenames.log.push({
+        text: `${currentTeam.toUpperCase()} Spymaster timed out! Turn passes to ${opponent.toUpperCase()}.`,
+        team: opponent,
+        at: Date.now(),
+      });
+      room.codenames.currentTurn = opponent;
+      room.codenames.turnSubPhase = "clue";
+      room.codenames.currentClue = null;
+      const clueSeconds = room.settings.codenamesClueSeconds ?? 60;
+      this.setPhase(room, "codenames_play", clueSeconds);
+      this.emitRoom(room);
+      return;
+    }
+
+    if (room.codenames.turnSubPhase === "guess") {
+      endOperativesTurn(room.codenames);
+      const clueSeconds = room.settings.codenamesClueSeconds ?? 60;
+      this.setPhase(room, "codenames_play", clueSeconds);
+      this.emitRoom(room);
+      return;
     }
   }
 

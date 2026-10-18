@@ -12,6 +12,7 @@ import type { Orientation } from "@/lib/games/battleship/powerups";
 import { GRID_SIZE } from "@/lib/games/battleship/grid";
 import { PrimaryButton } from "@/components/ui/primitives";
 import { BattleshipGrid } from "./BattleshipGrid";
+import { shipsFromFleet } from "./BattleshipShipSprites";
 import type { PublicGridCell } from "@/lib/games/battleship/selectors";
 
 function fleetToGrid(fleet: FleetPlacement): PublicGridCell[][] {
@@ -19,8 +20,18 @@ function fleetToGrid(fleet: FleetPlacement): PublicGridCell[][] {
     Array.from({ length: GRID_SIZE }, (_, col) => ({ col, row }))
   );
   for (const ship of fleet) {
-    ship.cells.forEach((c) => {
-      grid[c.row]![c.col] = { ...grid[c.row]![c.col]!, ship: ship.type };
+    const orientation =
+      ship.cells.length > 1 && ship.cells[1]!.col === ship.cells[0]!.col
+        ? ("vertical" as const)
+        : ("horizontal" as const);
+    ship.cells.forEach((c, i) => {
+      grid[c.row]![c.col] = {
+        ...grid[c.row]![c.col]!,
+        ship: ship.type,
+        shipIndex: i,
+        shipLength: ship.cells.length,
+        shipOrientation: orientation,
+      };
     });
   }
   return grid;
@@ -39,7 +50,7 @@ export function BattleshipPlacement({
 
   if (alreadyReady) {
     return (
-      <div className="rounded-sm border border-cyan-500/30 bg-slate-950/70 p-6 text-center text-cyan-100">
+      <div className="rounded-sm border border-cyan-500/30 bg-slate-950/70 p-4 text-center text-sm text-cyan-100">
         Fleet locked in. Waiting for opponent…
       </div>
     );
@@ -58,21 +69,18 @@ export function BattleshipPlacement({
     if (remaining) setSelected(remaining.type);
   };
 
-  const preview: { col: number; row: number }[] = [];
-  // no hover preview state for simplicity — rotation + place
-
   return (
-    <div className="space-y-4 rounded-sm border border-cyan-500/30 bg-slate-950/80 p-4 text-cyan-50">
+    <div className="mx-auto max-w-md space-y-3 rounded-sm border border-cyan-500/30 bg-slate-950/80 p-3 text-cyan-50 sm:p-4">
       <div>
-        <h3 className="font-display text-xl font-bold text-cyan-100">
+        <h3 className="font-display text-lg font-bold text-cyan-100 sm:text-xl">
           Deploy fleet
         </h3>
-        <p className="mt-1 text-sm text-cyan-200/70">
-          Select a ship, set orientation, tap the grid. No overlaps.
+        <p className="mt-0.5 text-xs text-cyan-200/70 sm:text-sm">
+          Select a ship, rotate, tap the grid. No overlaps.
         </p>
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-1.5">
         {FLEET_ROSTER.map((s) => {
           const placed = fleet.some((f) => f.type === s.type);
           return (
@@ -81,7 +89,7 @@ export function BattleshipPlacement({
               type="button"
               disabled={placed}
               onClick={() => setSelected(s.type)}
-              className={`rounded-sm border px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider ${
+              className={`rounded-sm border px-2 py-1 font-mono text-[9px] uppercase tracking-wider sm:px-2.5 sm:text-[10px] ${
                 selected === s.type && !placed
                   ? "border-cyan-400 bg-cyan-500/20 text-cyan-100"
                   : placed
@@ -95,7 +103,7 @@ export function BattleshipPlacement({
         })}
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-1.5">
         <button
           type="button"
           onClick={() =>
@@ -103,21 +111,21 @@ export function BattleshipPlacement({
               o === "horizontal" ? "vertical" : "horizontal"
             )
           }
-          className="rounded-sm border border-cyan-700 px-3 py-1.5 font-mono text-[10px] uppercase text-cyan-200"
+          className="rounded-sm border border-cyan-700 px-2.5 py-1 font-mono text-[9px] uppercase text-cyan-200 sm:text-[10px]"
         >
-          Rotate: {orientation} ({previewLen})
+          Rotate: {orientation === "horizontal" ? "H" : "V"} ({previewLen})
         </button>
         <button
           type="button"
           onClick={() => setFleet(generateRandomFleetLayout())}
-          className="rounded-sm border border-cyan-700 px-3 py-1.5 font-mono text-[10px] uppercase text-cyan-200"
+          className="rounded-sm border border-cyan-700 px-2.5 py-1 font-mono text-[9px] uppercase text-cyan-200 sm:text-[10px]"
         >
           Randomize
         </button>
         <button
           type="button"
           onClick={() => setFleet([])}
-          className="rounded-sm border border-cyan-900 px-3 py-1.5 font-mono text-[10px] uppercase text-cyan-400/70"
+          className="rounded-sm border border-cyan-900 px-2.5 py-1 font-mono text-[9px] uppercase text-cyan-400/70 sm:text-[10px]"
         >
           Clear
         </button>
@@ -126,16 +134,16 @@ export function BattleshipPlacement({
       <BattleshipGrid
         title="Friendly waters"
         cells={fleetToGrid(fleet)}
+        ships={shipsFromFleet(fleet)}
         interactive
         onCellClick={onCell}
-        preview={preview}
       />
 
       <PrimaryButton
         type="button"
         disabled={!isCompleteFleet(fleet)}
         onClick={() => onReady(fleet)}
-        className="w-full !bg-cyan-600 !text-slate-950"
+        className="w-full !bg-cyan-600 !py-2.5 !text-slate-950"
       >
         Lock in fleet
       </PrimaryButton>

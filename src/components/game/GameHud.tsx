@@ -93,6 +93,7 @@ export function GameHud({
     connect4_play: "CONNECT 4",
     battleship_setup: "SETUP",
     battleship_play: "BATTLESHIP",
+    codenames_play: "CODENAMES",
     gameover: "DEBRIEF",
   };
 

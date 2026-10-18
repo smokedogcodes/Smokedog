@@ -18,6 +18,8 @@
 .DS_Store
 *.pem
 Thumbs.db
+.cursor/
+.vercel/
 
 # debug
 npm-debug.log*

@@ -4,10 +4,10 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Ban, Mic } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { Ref } from "react";
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { PublicFiveAliveCard, PublicGameState } from "@/lib/types";
 import { lifeColorForPlayerIndex } from "@/lib/games/5-alive/rules";
-import { FiveAliveDeckCard } from "@/components/mockups/five-alive/FiveAliveDeckCard";
+import { FiveAliveDeckCard, FiveAliveDeckCardBack } from "@/components/mockups/five-alive/FiveAliveDeckCard";
 import { FA_EASE } from "@/components/mockups/five-alive/FiveAliveTableAnimation";
 import { PlayerAvatar } from "@/components/ui/PlayerAvatar";
 import { FiveAliveLifeCard } from "./FiveAliveLifeCard";
@@ -56,10 +56,11 @@ function nextLivingPlayerId(
  * Prevents the 2p "giant circles" distortion.
  */
 function boardGeometry(n: number, compact: boolean) {
-  const podSize = compact ? 102 : 116;
-  const hubRadius = compact ? 78 : 96;
+  // Slightly tighter pods/hub on phones so less downscaling is needed.
+  const podSize = compact ? 92 : 116;
+  const hubRadius = compact ? 70 : 96;
   // Clearance between hub edge and pod inner edge
-  const gap = compact ? 14 : 18;
+  const gap = compact ? 12 : 18;
   let orbit = hubRadius + podSize / 2 + gap;
   // Ensure pods don't overlap each other
   if (n >= 2) {
@@ -67,10 +68,10 @@ function boardGeometry(n: number, compact: boolean) {
     orbit = Math.max(orbit, minOrbit * 1.05);
   }
   // Cap for mobile viewport
-  if (compact) orbit = Math.min(orbit, 148);
+  if (compact) orbit = Math.min(orbit, 132);
   else orbit = Math.min(orbit, 178);
 
-  const boardSize = orbit * 2 + podSize + (compact ? 12 : 20);
+  const boardSize = orbit * 2 + podSize + (compact ? 10 : 20);
   const discSize = hubRadius * 2;
 
   return { podSize, orbit, boardSize, discSize, hubRadius };
@@ -184,8 +185,8 @@ function HandCountBadge({
       className={cn(
         "absolute z-20 flex items-center gap-0.5 rounded-md border border-[#d4cfc4] bg-[#ebe6dc] font-sans font-bold text-[#5c4033] shadow-sm",
         compact
-          ? "-right-1.5 top-0 px-1 py-0.5 text-[8px]"
-          : "-right-2 top-0.5 px-1.5 py-0.5 text-[9px]"
+          ? "-right-3 -top-1.5 px-1 py-0.5 text-[8px]"
+          : "-right-3.5 -top-1.5 px-1.5 py-0.5 text-[9px]"
       )}
       title={`${count} cards in hand`}
       aria-label={`${count} cards in hand`}
@@ -232,7 +233,7 @@ function LastPlayedFan({
   centerRef?: (el: HTMLDivElement | null) => void;
   centerPlaceholder?: boolean;
 }) {
-  const cardW = compact ? 42 : 52;
+  const cardW = compact ? 40 : 52;
   const show = cards.length > 0 && !centerPlaceholder;
   const fan = show ? cards.slice(-3) : [];
 
@@ -267,15 +268,13 @@ function LastPlayedFan({
             );
           })
         ) : (
+          // Invisible fly target when nothing has been played yet (no dashed outline).
           <div
             ref={centerRef}
-            className={cn(
-              "flex aspect-[5/7] items-center justify-center rounded-[8px] border border-dashed border-[#9a6b4a]/40 bg-white/40 font-sans uppercase tracking-widest text-[#7D2D2D]/50",
-              compact ? "w-[38px] text-[6px]" : "w-[46px] text-[7px]"
-            )}
-          >
-            —
-          </div>
+            className="pointer-events-none absolute opacity-0"
+            style={{ width: cardW, height: (cardW * 7) / 5 }}
+            aria-hidden
+          />
         )}
         <div
           className="pointer-events-none invisible"
@@ -379,7 +378,7 @@ export function FiveAliveTable({
       />
       <div className="text-center">
         <p className="font-sans text-[8px] font-bold uppercase tracking-widest text-[#7D2D2D]/70">
-          Running total
+          Total
         </p>
         <p
           className={cn(
@@ -393,7 +392,8 @@ export function FiveAliveTable({
       {/* Invisible deal-fly origin when this strip is used without LifeTracker */}
       <div
         ref={drawRef}
-        className="pointer-events-none size-1 opacity-0"
+        className="pointer-events-none relative"
+        style={{ width: 44, height: (44 * 7) / 5 }}
         aria-hidden
       />
     </div>
@@ -428,6 +428,8 @@ export function FiveAliveLifeTracker({
   drawRef?: Ref<HTMLDivElement>;
 }) {
   const [compact, setCompact] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [boardScale, setBoardScale] = useState(1);
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 639px)");
@@ -447,6 +449,20 @@ export function FiveAliveLifeTracker({
   const n = Math.max(players.length, 1);
   const twoPlayer = n === 2;
   const { podSize, orbit, boardSize, discSize } = boardGeometry(n, compact);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const update = () => {
+      const avail = el.clientWidth;
+      if (avail <= 0) return;
+      setBoardScale(boardSize > avail ? avail / boardSize : 1);
+    };
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    update();
+    return () => ro.disconnect();
+  }, [boardSize]);
 
   const seats = useMemo(() => {
     if (!twoPlayer || !youId) {
@@ -476,14 +492,25 @@ export function FiveAliveLifeTracker({
   const handCounts = five?.handCounts;
 
   return (
-    <div className="relative mx-auto w-full max-w-lg select-none overflow-visible">
+    <div
+      ref={wrapRef}
+      className="relative mx-auto w-full max-w-lg select-none overflow-visible"
+    >
+      <div
+        className="relative mx-auto overflow-visible"
+        style={{
+          width: "100%",
+          height: boardSize * boardScale,
+        }}
+      >
       <div
         className="relative mx-auto overflow-visible rounded-[1.25rem]"
         style={{
           width: boardSize,
           height: boardSize,
-          maxWidth: "100%",
           background: FA_FELT,
+          transform: `scale(${boardScale})`,
+          transformOrigin: "top center",
         }}
       >
         {/* Soft guide circle under hub */}
@@ -524,7 +551,7 @@ export function FiveAliveLifeTracker({
                     totalTone(five.runningTotal)
                   )}
                 >
-                  Running total:{" "}
+                  Total:{" "}
                   <motion.span
                     key={five.runningTotal}
                     initial={{ scale: 1.1, opacity: 0.75 }}
@@ -543,29 +570,54 @@ export function FiveAliveLifeTracker({
               </div>
 
               <div className="pointer-events-auto relative z-10 w-full shrink-0 overflow-visible px-1">
-                <LastPlayedFan
-                  cards={recentCards}
-                  compact={compact}
-                  centerRef={centerRef}
-                  centerPlaceholder={centerPlaceholder}
-                />
+                {five.dealEvent ? (
+                  <div
+                    className="relative mx-auto flex min-h-[3.75rem] items-center justify-center sm:min-h-[4.75rem]"
+                    aria-hidden
+                  >
+                    {/* Sized origin for deal flies — single deck card in hub */}
+                    <div
+                      ref={drawRef}
+                      className="relative"
+                      style={{
+                        width: compact ? 40 : 48,
+                        height: ((compact ? 40 : 48) * 7) / 5,
+                      }}
+                    >
+                      <FiveAliveDeckCardBack
+                        width={compact ? 40 : 48}
+                        className="relative shadow-lg"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <LastPlayedFan
+                    cards={recentCards}
+                    compact={compact}
+                    centerRef={centerRef}
+                    centerPlaceholder={centerPlaceholder}
+                  />
+                )}
               </div>
 
               <p
                 className={cn(
-                  "relative z-10 max-w-[95%] shrink-0 text-center font-sans font-semibold text-[#8B1E1E]",
+                  "relative z-10 max-w-[95%] shrink-0 truncate px-1 text-center font-sans font-semibold text-[#8B1E1E]",
                   compact ? "text-[9px]" : "text-[10px] sm:text-[11px]"
                 )}
               >
                 Turn: {turnName}
               </p>
 
-              {/* Invisible deal-fly origin (draw pile UI removed) */}
-              <div
-                ref={drawRef}
-                className="pointer-events-none absolute left-1/2 top-1/2 size-1 -translate-x-1/2 -translate-y-1/2 opacity-0"
-                aria-hidden
-              />
+              {/* Fallback invisible origin when not dealing (strip / rare paths) */}
+              {!five.dealEvent ? (
+                <div
+                  ref={drawRef}
+                  className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 opacity-0"
+                  style={{ width: 44, height: (44 * 7) / 5 }}
+                  aria-hidden
+                />
+              ) : null}
             </>
           ) : (
             <div className="relative z-10 text-center">
@@ -692,16 +744,23 @@ export function FiveAliveLifeTracker({
                   <button
                     type="button"
                     onClick={() => onInviteVoice(p.id)}
-                    className="absolute -bottom-0.5 left-1/2 z-30 flex -translate-x-1/2 items-center gap-0.5 rounded-full border border-[#7D2D2D]/35 bg-[#F2F1E9] px-1.5 py-0.5 font-sans text-[8px] uppercase tracking-wider text-[#7D2D2D] shadow-sm"
+                    className={cn(
+                      "absolute left-1/2 z-30 flex -translate-x-1/2 items-center justify-center rounded-full border border-[#7D2D2D]/35 bg-[#F2F1E9] text-[#7D2D2D] shadow-sm",
+                      compact
+                        ? "-bottom-1 size-6"
+                        : "-bottom-0.5 gap-0.5 px-1.5 py-0.5 font-sans text-[8px] uppercase tracking-wider"
+                    )}
                     aria-label={`Invite ${p.name} to voice`}
                   >
-                    <Mic size={9} /> Voice
+                    <Mic size={compact ? 11 : 9} />
+                    {compact ? null : " Voice"}
                   </button>
                 ) : null}
               </motion.div>
             </div>
           );
         })}
+      </div>
       </div>
     </div>
   );

@@ -2,6 +2,7 @@
 
 import { PrimaryButton } from "@/components/ui/primitives";
 import { BattleshipGrid } from "./BattleshipGrid";
+import { shipsFromFleet } from "./BattleshipShipSprites";
 import type { BattleshipPublicState } from "@/lib/games/battleship/selectors";
 import type { PublicGameState } from "@/lib/types";
 import { GRID_SIZE } from "@/lib/games/battleship/grid";
@@ -22,11 +23,18 @@ function fleetRevealGrid(
 
   if (which === "opp" && bs.revealedOpponentFleet) {
     for (const ship of bs.revealedOpponentFleet) {
+      const orientation =
+        ship.cells.length > 1 && ship.cells[1]!.col === ship.cells[0]!.col
+          ? ("vertical" as const)
+          : ("horizontal" as const);
       ship.cells.forEach((c, i) => {
         base[c.row]![c.col] = {
           ...base[c.row]![c.col]!,
           ship: ship.type,
           hitOnShip: ship.hits[i],
+          shipIndex: i,
+          shipLength: ship.cells.length,
+          shipOrientation: orientation,
         };
       });
     }
@@ -57,19 +65,19 @@ export function BattleshipGameOver({
       ? Math.round((stats.hits / stats.shotsFired) * 100)
       : 0;
   const powerUsed = stats
-    ? Object.values(stats.powerUpsUsed).reduce(
-        (a: number, b: number) => a + b,
+    ? (Object.values(stats.powerUpsUsed) as number[]).reduce(
+        (a, b) => a + b,
         0
       )
     : 0;
 
   return (
-    <div className="space-y-6 rounded-sm border border-cyan-500/40 bg-slate-950/90 p-4 text-cyan-50 sm:p-6">
+    <div className="mx-auto max-w-3xl space-y-4 rounded-sm border border-cyan-500/40 bg-slate-950/90 p-3 text-cyan-50 sm:p-5">
       <div>
         <p className="font-mono text-[10px] uppercase tracking-widest text-amber-400">
           Debrief
         </p>
-        <h2 className="mt-1 font-display text-3xl font-bold text-cyan-100">
+        <h2 className="mt-1 font-display text-2xl font-bold text-cyan-100 sm:text-3xl">
           {youWon ? "Victory" : "Defeat"}
         </h2>
         <p className="mt-1 text-sm text-cyan-200/80">
@@ -100,11 +108,12 @@ export function BattleshipGameOver({
         </div>
       ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <BattleshipGrid title="Your fleet" cells={fleetRevealGrid(bs, "you")} />
+      <div className="grid justify-items-center gap-3 lg:grid-cols-2">
+        <BattleshipGrid title="Your fleet" cells={fleetRevealGrid(bs, "you")} compact />
         <BattleshipGrid
           title="Enemy fleet (revealed)"
           cells={fleetRevealGrid(bs, "opp")}
+          compact
         />
       </div>
 

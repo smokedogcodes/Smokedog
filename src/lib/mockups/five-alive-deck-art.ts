@@ -201,3 +201,31 @@ export function cardTypeName(card: FiveAliveRenderableCard): string {
       return "Alive — Life";
   }
 }
+
+/** Compact name for the card-face footer strip. */
+export function faFooterName(card: FiveAliveRenderableCard): string {
+  if (card.type === "eq10") return "Equals 10";
+  if (card.type === "shuffle") return "Shuffle";
+  if (card.type === "passmeby") return "Pass By Me";
+
+  switch (card.type) {
+    case "number":
+      return `Number ${card.value}`;
+    case "eq21":
+      return "Equals 21";
+    case "reset0":
+      return "Reset 0";
+    case "skip":
+      return "Skip";
+    case "reverse":
+      return "Reverse";
+    case "draw1":
+      return "Draw 1";
+    case "draw2":
+      return "Draw 2";
+    case "bomb":
+      return "Bomb";
+    case "life":
+      return "Life";
+  }
+}

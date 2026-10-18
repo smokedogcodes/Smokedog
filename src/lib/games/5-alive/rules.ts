@@ -24,17 +24,27 @@ export function isPlayableAtTwentyOne(type: string): boolean {
   return isFiveAliveActionCard(type) || isFiveAliveTotalSetter(type);
 }
 
+function asFiniteNumber(value: unknown, fallback = 0): number {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 export function canPlayFiveAliveCardAtTotal(
   card: FiveAliveCardInstance | PublicFiveAliveCard,
   runningTotal: number
 ): boolean {
+  // Coerce — socket/DO payloads can occasionally deliver numeric fields as strings,
+  // and `"5" + 4 === "54"` would incorrectly mark every number card unplayable.
+  const total = asFiniteNumber(runningTotal, 0);
+
   // At 21: number 0 stays legal (21+0); other numbers blocked. Actions + setters OK.
-  if (runningTotal === 21) {
-    if (card.type === "number") return (card.value ?? -1) === 0;
+  if (total === 21) {
+    if (card.type === "number") return asFiniteNumber(card.value, -1) === 0;
     return isPlayableAtTwentyOne(card.type);
   }
   if (card.type === "number") {
-    return runningTotal + (card.value ?? 0) <= 21;
+    const value = asFiniteNumber(card.value, 0);
+    return total + value <= 21;
   }
   return true;
 }

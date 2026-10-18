@@ -117,20 +117,20 @@ export function FiveAliveTurnPanel({
         className={`${FA_HAND_PANEL_CLASS} p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4`}
         style={FA_HAND_PANEL_STYLE}
       >
-        <h3 className="font-sans text-lg font-bold uppercase tracking-wide text-[#7D2D2D] sm:text-xl">
+        <h3 className="font-sans text-base font-bold uppercase tracking-wide text-[#7D2D2D] sm:text-xl">
           Your hand
         </h3>
         {!yourTurn && (
-          <p className="mt-1 text-sm text-[#7D2D2D]/70">Locked until your turn.</p>
+          <p className="mt-1 text-xs text-[#7D2D2D]/70 sm:text-sm">Locked until your turn.</p>
         )}
         {yourTurn && !youAlive && (
-          <p className="mt-1 text-sm text-[#7D2D2D]/70">Eliminated — spectating.</p>
+          <p className="mt-1 text-xs text-[#7D2D2D]/70 sm:text-sm">Eliminated — spectating.</p>
         )}
         {paused && (
-          <p className="mt-1 text-sm text-[#8B1E1E]">Paused — host must resume.</p>
+          <p className="mt-1 text-xs text-[#8B1E1E] sm:text-sm">Paused — host must resume.</p>
         )}
         {actionsBlocked && (
-          <p className="mt-1 text-sm text-[#8B1E1E]">Life lost — wait for the flip…</p>
+          <p className="mt-1 text-xs text-[#8B1E1E] sm:text-sm">Life lost — wait for the flip…</p>
         )}
 
         <div className="mt-2 pt-1 sm:mt-4">
